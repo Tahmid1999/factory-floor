@@ -146,7 +146,7 @@ describe('batch ingest', () => {
     const res = await s.send({
       deviceId: s.deviceId,
       deviceNow: now(),
-      events: [ev(1, s.codes[0]), ev(2, s.codes[0], { op: 'sew_sleeve' }), ev(3, s.codes[1])],
+      events: [ev(1, s.codes[0]), ev(2, s.codes[0]), ev(3, s.codes[1])],
     });
     expect(res.body.results).toEqual([
       { seq: 1, result: 'rejected', reason: 'rework' },
@@ -158,7 +158,7 @@ describe('batch ingest', () => {
     expect(rows.map((r) => r.result)).toEqual(['rejected(rework)', 'rejected(rework)', null]);
   });
 
-  it('rejects not-yours, unknown codes and gate-only ops without a row', async () => {
+  it("rejects not-yours, unknown codes, another station's ops and gate-only ops without a row", async () => {
     const s = await station();
     const other = await station();
     const res = await s.send({
@@ -168,21 +168,29 @@ describe('batch ingest', () => {
         ev(1, other.codes[0]),
         ev(2, 'B-0000'),
         ev(3, s.codes[0], { op: 'ship' }),
-        ev(4, s.codes[0], { op: 'cut' }),
-        ev(5, s.codes[0], { op: 'qc_final' }),
+        ev(4, s.codes[0], { op: 'pack' }),
+        ev(5, s.codes[0], { op: 'hem' }),
         ev(6, s.codes[0], { op: 'qc_flag' }),
+        ev(7, s.codes[0]),
       ],
     });
     expect(res.body.results).toEqual([
       { seq: 1, result: 'rejected', reason: 'not-yours' },
       { seq: 2, result: 'rejected', reason: 'not-yours' },
-      { seq: 3, result: 'rejected', reason: 'gate-only' },
-      { seq: 4, result: 'rejected', reason: 'gate-only' },
-      { seq: 5, result: 'rejected', reason: 'gate-only' },
-      { seq: 6, result: 'accepted' },
+      { seq: 3, result: 'rejected', reason: 'wrong-station' },
+      { seq: 4, result: 'rejected', reason: 'wrong-station' },
+      { seq: 5, result: 'rejected', reason: 'wrong-station' },
+      { seq: 6, result: 'rejected', reason: 'wrong-station' },
+      { seq: 7, result: 'accepted' },
     ]);
     const seqs = (await prisma.scanInbox.findMany({ where: { deviceId: s.deviceId } })).map((r) => r.seq);
-    expect(seqs).toEqual([6]);
+    expect(seqs).toEqual([7]);
+
+    // Q-02's own op is still a gate call, never a queued scan.
+    const q = await station('Q-02');
+    const gated = await q.send({ deviceId: q.deviceId, deviceNow: now(), events: [ev(1, q.codes[0], { op: 'qc_final' })] });
+    expect(gated.body.results).toEqual([{ seq: 1, result: 'rejected', reason: 'gate-only' }]);
+    expect(await prisma.scanInbox.count({ where: { deviceId: q.deviceId } })).toBe(0);
   });
 
   it('repeats a notice with the same id for 60 s after delivery, then stops', async () => {
@@ -266,7 +274,7 @@ describe('batch ingest', () => {
     expect(res.body.results).toEqual([]);
     // a sim device cannot touch a visitor's bundle
     clock.advance(1000);
-    const bad = await sim({ deviceId: dev.body.deviceId, deviceNow: now(), events: [ev(1, s.codes[0])] }).expect(201);
+    const bad = await sim({ deviceId: dev.body.deviceId, deviceNow: now(), events: [ev(1, s.codes[0], { op: 'sew_sleeve' })] }).expect(201);
     expect(bad.body.results).toEqual([{ seq: 1, result: 'rejected', reason: 'not-yours' }]);
   });
 

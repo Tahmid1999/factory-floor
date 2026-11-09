@@ -3,7 +3,7 @@ import { Device, Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { CLOCK, Clock } from '../clock';
 import { Actor, mayScan } from '../guests/ownership';
-import { POLO_ROUTE } from '../line/line';
+import { POLO_ROUTE, STATIONS, StationCode } from '../line/line';
 import { PrismaService } from '../prisma.service';
 import { deviceLabel, HoodService } from '../hood/hood';
 import { Rabbit } from '../rabbit';
@@ -77,6 +77,13 @@ export class IngestService {
           correctedAt < device.registeredAt.getTime()
         ) {
           reject('clock');
+          continue;
+        }
+        // A device is one station on the floor and scans that station's op
+        // only. Without this a visitor's S-07 could post the pack that P-01,
+        // a sim-only station, is there to make, or a hem it never stood at.
+        if (STATIONS[device.code as StationCode]?.op !== e.op) {
+          reject('wrong-station');
           continue;
         }
         // An unknown code gets the same answer as someone else's bundle so the
