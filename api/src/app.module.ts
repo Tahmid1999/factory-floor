@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CoreModule } from './core.module';
 import { AuthModule } from './auth/auth.module';
+import { GateModule } from './gate/gate.module';
 import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
 import { IngestModule } from './ingest/ingest.module';
@@ -15,6 +16,7 @@ import { IngestModule } from './ingest/ingest.module';
     GuestsModule,
     AuthModule,
     IngestModule,
+    GateModule,
   ],
   controllers: [HealthController],
 })

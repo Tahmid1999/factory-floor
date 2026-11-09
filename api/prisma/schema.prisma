@@ -136,6 +136,8 @@ model BundleEvent {
   deviceId    String?
   inboxId     String?     @unique
   gateId      String?     @unique
+  // The first reply to this gateId, returned again to a repeat of it.
+  gateReply   Json?
   round       Int
   correctedAt DateTime
   wasted      Boolean     @default(false)
