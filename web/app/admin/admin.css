@@ -126,7 +126,19 @@
     overflow-x: auto;
   }
 
+  /* one scrolling row of views instead of a column that fills the phone */
   .adm-side .ant-menu {
-    min-width: 0;
+    display: flex;
+    flex-wrap: nowrap;
+    padding: 0 6px;
+  }
+
+  .adm-side .ant-menu-item {
+    flex: none;
+    width: auto;
+    margin: 0 2px;
+    height: 32px;
+    line-height: 32px;
+    white-space: nowrap;
   }
 }
