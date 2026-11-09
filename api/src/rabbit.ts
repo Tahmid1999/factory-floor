@@ -8,6 +8,7 @@ export const HOOD_EXCHANGE = 'hood';
 
 type Conn = Awaited<ReturnType<typeof amqp.connect>>;
 type Chan = Awaited<ReturnType<Conn['createChannel']>>;
+type HoodHandler = (e: HoodEvent) => void;
 type ApplyConsumer = { handler: (inboxId: string) => Promise<void>; prefetch: number };
 
 @Injectable()
@@ -17,6 +18,8 @@ export class Rabbit implements OnModuleDestroy {
   private chan?: Promise<Chan>;
   private applyConsumer?: ApplyConsumer;
   private readonly subscribed = new WeakSet<Chan>();
+  private readonly hoodHandlers: HoodHandler[] = [];
+  private readonly hoodBound = new WeakMap<Chan, Set<HoodHandler>>();
   private recovering = false;
   private closing = false;
 
@@ -55,13 +58,14 @@ export class Rabbit implements OnModuleDestroy {
     await ch.assertQueue(APPLY_QUEUE, { durable: true });
     await ch.assertExchange(HOOD_EXCHANGE, 'fanout', { durable: false });
     if (this.applyConsumer) await this.subscribe(ch, this.applyConsumer);
+    for (const fn of this.hoodHandlers) await this.subscribeHood(ch, fn);
     return ch;
   }
 
   // Only a standing consumer needs the connection back; publishers reconnect
   // lazily on their next call.
   private recover(attempt = 0) {
-    if (this.closing || !this.applyConsumer || this.recovering) return;
+    if (this.closing || (!this.applyConsumer && this.hoodHandlers.length === 0) || this.recovering) return;
     this.recovering = true;
     const delay = Math.min(500 * 2 ** attempt, 5000);
     setTimeout(() => {
@@ -125,17 +129,47 @@ export class Rabbit implements OnModuleDestroy {
     ch.publish(HOOD_EXCHANGE, '', Buffer.from(JSON.stringify(e)));
   }
 
-  async consumeHood(fn: (e: HoodEvent) => void): Promise<void> {
-    const ch = await this.channel();
+  // Each handler gets its own exclusive queue on the fanout. The queue dies
+  // with its channel, so every new channel binds a fresh one.
+  private async subscribeHood(ch: Chan, fn: HoodHandler) {
+    let bound = this.hoodBound.get(ch);
+    if (!bound) this.hoodBound.set(ch, (bound = new Set()));
+    // open() binds the handlers it already knows; consumeHood must not bind twice.
+    if (bound.has(fn)) return;
+    bound.add(fn);
     const { queue } = await ch.assertQueue('', { exclusive: true, autoDelete: true });
     await ch.bindQueue(queue, HOOD_EXCHANGE, '');
     await ch.consume(
       queue,
       (msg) => {
-        if (msg) fn(JSON.parse(msg.content.toString()));
+        if (!msg) return;
+        let e: HoodEvent;
+        try {
+          e = JSON.parse(msg.content.toString());
+        } catch {
+          this.log.warn('hood line skipped, not json');
+          return;
+        }
+        try {
+          fn(e);
+        } catch (err) {
+          this.log.warn(`hood handler failed: ${(err as Error).message}`);
+        }
       },
       { noAck: true },
     );
+  }
+
+  // The window on the line is best effort: a broker that is down now is
+  // retried in the background and the handler is bound when it is back.
+  async consumeHood(fn: HoodHandler): Promise<void> {
+    this.hoodHandlers.push(fn);
+    try {
+      await this.subscribeHood(await this.channel(), fn);
+    } catch (err) {
+      this.log.warn(`hood consumer not bound yet: ${(err as Error).message}`);
+      this.recover();
+    }
   }
 
   async onModuleDestroy() {
