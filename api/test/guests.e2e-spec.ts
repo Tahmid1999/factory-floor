@@ -69,6 +69,13 @@ describe('guests', () => {
     expect(await prisma.device.count({ where: { simName: 'sim-cutter' } })).toBe(1);
   });
 
+  it('gives the station the rates, trims and labour posted per bundle', async () => {
+    const res = await http().get('/me').set('x-forwarded-for', freshIp()).expect(200);
+    expect(res.body.rates).toEqual({ cut: 10, sew_collar: 15, sew_sleeve: 12, side_seam: 11, hem: 8, pack: 6 });
+    expect(res.body.trims).toEqual({ sew_sleeve: 290 });
+    for (const b of res.body.bundles) expect(b).toMatchObject({ pieces: 20, paid: { cut: 200 } });
+  });
+
   it('reuses the guest on a later request with the cookie', async () => {
     const agent = request.agent(app.getHttpServer());
     const ip = freshIp();

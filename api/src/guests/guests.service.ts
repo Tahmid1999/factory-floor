@@ -18,7 +18,20 @@ export type MeBody = {
   name: string;
   mode: GuestMode;
   serverNow: number;
-  bundles: { code: string; status: string; nextOp: string | null; round: number; wastedMills: number }[];
+  // Mills per piece and trims per bundle, as of now. The station prices its
+  // own tally and the waste it avoided from these, never from a copy of its own.
+  rates: Record<string, number>;
+  trims: Record<string, number>;
+  bundles: {
+    code: string;
+    status: string;
+    nextOp: string | null;
+    round: number;
+    pieces: number;
+    wastedMills: number;
+    // Labour actually posted per op over every round, so a redo shows what it was paid.
+    paid: Record<string, number>;
+  }[];
 };
 
 export function hashIp(ip: string): string {
@@ -161,11 +174,32 @@ export class GuestsService {
     });
     const wastedMills = new Map<string, number>();
     for (const b of bundles) wastedMills.set(b.id, await wasteOf(this.prisma, b.id));
+    const paid = new Map<string, Record<string, number>>();
+    if (bundles.length > 0) {
+      const rows = await this.prisma.$queryRaw<{ bundleCode: string; op: string; mills: bigint }[]>`
+        SELECT p."bundleCode", e."op", SUM(p."amountMills") AS mills
+        FROM "Posting" p JOIN "BundleEvent" e ON e."id" = p."eventId"
+        WHERE p."kind" = 'labour' AND p."bundleCode" IN (${Prisma.join(bundles.map((b) => b.code))})
+        GROUP BY p."bundleCode", e."op"`;
+      for (const r of rows) paid.set(r.bundleCode, { ...paid.get(r.bundleCode), [r.op]: Number(r.mills) });
+    }
+
+    const style = await this.prisma.style.findUniqueOrThrow({ where: { code: STYLE_CODE } });
+    const pieceRates = await this.prisma.pieceRate.findMany({ where: { styleId: style.id } });
+    const rates: Record<string, number> = {};
+    for (const op of new Set(pieceRates.map((r) => r.op))) {
+      // Only rates already in force; one effective later is not paid yet.
+      if (pieceRates.some((r) => r.op === op && r.effectiveFrom <= now)) rates[op] = rateAt(pieceRates, style.id, op, now);
+    }
+    const trims: Record<string, number> = {};
+    for (const o of await this.prisma.operation.findMany()) if (o.trimsMills > 0) trims[o.code] = o.trimsMills;
 
     return {
       name: guest.name,
       mode: guest.mode,
       serverNow: now.getTime(),
+      rates,
+      trims,
       bundles: bundles.map((b) => {
         const done = b.status === 'packed' || b.status === 'shipped';
         return {
@@ -173,7 +207,9 @@ export class GuestsService {
           status: b.status,
           nextOp: done ? null : (b.style.route[b.nextStep] ?? null),
           round: b.reworkRound,
+          pieces: b.pieces,
           wastedMills: wastedMills.get(b.id) ?? 0,
+          paid: paid.get(b.code) ?? {},
         };
       }),
     };
