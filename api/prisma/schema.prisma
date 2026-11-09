@@ -88,19 +88,20 @@ model Device {
 }
 
 model Bundle {
-  id          String       @id @default(cuid())
-  code        String       @unique
-  styleId     String
-  pieces      Int
-  status      BundleStatus
-  nextStep    Int          @default(0)
-  reworkRound Int          @default(0)
-  guestId     String?
-  isSimulated Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  style       Style        @relation(fields: [styleId], references: [id])
-  guest       Guest?       @relation(fields: [guestId], references: [id])
+  id            String       @id @default(cuid())
+  code          String       @unique
+  styleId       String
+  pieces        Int
+  status        BundleStatus
+  nextStep      Int          @default(0)
+  reworkRound   Int          @default(0)
+  lastClearedAt DateTime?
+  guestId       String?
+  isSimulated   Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  style         Style        @relation(fields: [styleId], references: [id])
+  guest         Guest?       @relation(fields: [guestId], references: [id])
 }
 
 model ScanInbox {
