@@ -1,5 +1,6 @@
 // The API and the worker for Playwright: built fresh, pointed at factory_test,
-// with the simulated line off so nothing but the test touches a bundle.
+// with the simulated line off so nothing but the test touches a bundle. The
+// sim-on config sets STACK_SIM=1 to run the trap beside a live line instead.
 const { spawn, spawnSync } = require('node:child_process');
 const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
@@ -9,7 +10,7 @@ const api = path.join(root, 'api');
 const env = {
   ...process.env,
   DATABASE_URL: process.env.TEST_DATABASE_URL,
-  SIM_ENABLED: '0',
+  SIM_ENABLED: process.env.STACK_SIM === '1' ? '1' : '0',
   WEB_ORIGIN: 'http://localhost:3140',
   PORT: '4120',
   ...require('./admin-env.cjs'),

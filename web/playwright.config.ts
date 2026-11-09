@@ -8,6 +8,8 @@ config({ path: path.resolve(__dirname, '../.env'), quiet: true });
 // One worker: the trap spec wipes factory_test before it runs.
 export default defineConfig({
   testDir: './e2e',
+  // Needs the line running; playwright.sim.config.ts starts it.
+  testIgnore: /live-sim\.spec\.ts/,
   workers: 1,
   fullyParallel: false,
   timeout: 60_000,
