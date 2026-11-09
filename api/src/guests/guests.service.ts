@@ -186,11 +186,15 @@ export class GuestsService {
   async refill(guest: Guest): Promise<MeBody> {
     const now = this.clock.now();
     const style = await this.prisma.style.findUniqueOrThrow({ where: { code: STYLE_CODE } });
-    const waiting = [style.route.indexOf('sew_collar'), style.route.indexOf('sew_sleeve')];
-    const stuck = await this.prisma.bundle.count({
-      where: { guestId: guest.id, status: 'active', nextStep: { in: waiting } },
+    // Only an untouched bundle blocks a refill. One redone after rework waits
+    // at the sleeve again, and holding the visitor to it would stall the demo.
+    const untouched = await this.prisma.bundle.findFirst({
+      where: { guestId: guest.id, status: 'active', reworkRound: 0, nextStep: style.route.indexOf('sew_collar') },
+      orderBy: { createdAt: 'asc' },
     });
-    if (stuck > 0) throw new HttpException({ error: 'finish the bundles you have first' }, 409);
+    if (untouched) {
+      throw new HttpException({ error: 'finish the bundles you have first', bundle: untouched.code }, 409);
+    }
 
     await this.prisma.$transaction(async (tx) => {
       // The conditional update is the counter, so two parallel refills cannot

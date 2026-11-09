@@ -113,12 +113,25 @@ describe('guests', () => {
   });
 
   describe('refill', () => {
-    it('is 409 while bundles wait at sew_collar', async () => {
+    it('is 409 while a bundle waits at sew_collar in round 0, and names it', async () => {
       const agent = request.agent(app.getHttpServer());
       const ip = freshIp();
-      await agent.get('/me').set('x-forwarded-for', ip).expect(200);
+      const me = await agent.get('/me').set('x-forwarded-for', ip).expect(200);
       const res = await agent.post('/me/bundles/refill').set('x-forwarded-for', ip).expect(409);
-      expect(res.body).toEqual({ error: 'finish the bundles you have first' });
+      expect(res.body).toEqual({ error: 'finish the bundles you have first', bundle: me.body.bundles[0].code });
+    });
+
+    it('is not blocked by bundles redone after rework or already past the collar', async () => {
+      const agent = request.agent(app.getHttpServer());
+      const ip = freshIp();
+      const me = await agent.get('/me').set('x-forwarded-for', ip).expect(200);
+      const [a, b, c] = me.body.bundles.map((x: { code: string }) => x.code);
+      // a redone collar waits at sew_collar in round 1, b waits at the sleeve, c is in rework
+      await prisma.bundle.update({ where: { code: a }, data: { reworkRound: 1 } });
+      await prisma.bundle.update({ where: { code: b }, data: { nextStep: 2 } });
+      await prisma.bundle.update({ where: { code: c }, data: { status: 'rework', nextStep: 2 } });
+      const r = await agent.post('/me/bundles/refill').set('x-forwarded-for', ip).expect(201);
+      expect(r.body.bundles).toHaveLength(6);
     });
 
     it('adds 3 bundles once none waits at the sewing steps, and stops after 10 a day', async () => {
