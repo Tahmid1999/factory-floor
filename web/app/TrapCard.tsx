@@ -19,7 +19,9 @@ type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function until<T>(check: () => Promise<T | undefined>, ms: number, every = 500): Promise<T | undefined> {
+// Each check is a /me read, and the server allows an address 120 a minute;
+// once a second leaves room for the station's own refresh and a second tab.
+async function until<T>(check: () => Promise<T | undefined>, ms: number, every = 1000): Promise<T | undefined> {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     const v = await check();
