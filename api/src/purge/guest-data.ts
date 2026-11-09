@@ -2,6 +2,14 @@ import { Prisma } from '@prisma/client';
 
 type Tx = Prisma.TransactionClient;
 
+// The bundle rows first, in code order, the lock the worker and the gate take
+// before they touch a bundle's inbox rows. Deleting the inbox rows first
+// would take those locks the other way round, and a worker applying one of
+// these bundles at that moment would deadlock with us.
+export async function lockBundles(tx: Tx, where: Prisma.Sql): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "Bundle" WHERE ${where} ORDER BY "code" FOR UPDATE`;
+}
+
 // A guest's postings outlive the guest with the reference cut, so a month's
 // totals never move because a visitor left.
 export async function orphanPostings(tx: Tx, guestIds: string[]): Promise<void> {
@@ -15,6 +23,7 @@ export async function orphanPostings(tx: Tx, guestIds: string[]): Promise<void> 
 // orphans the rest first.
 export async function deleteGuestData(tx: Tx, guestIds: string[]): Promise<void> {
   if (guestIds.length === 0) return;
+  await lockBundles(tx, Prisma.sql`"guestId" = ANY(${guestIds})`);
   const devices = Prisma.sql`(SELECT "id" FROM "Device" WHERE "guestId" = ANY(${guestIds}))`;
   const bundles = Prisma.sql`(SELECT "id" FROM "Bundle" WHERE "guestId" = ANY(${guestIds}))`;
   await tx.$executeRaw`DELETE FROM "ScanInbox" WHERE "deviceId" IN ${devices}`;

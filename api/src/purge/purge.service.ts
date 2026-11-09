@@ -4,7 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { CLOCK, Clock } from '../clock';
 import { PrismaService } from '../prisma.service';
 import { Rabbit } from '../rabbit';
-import { deleteGuestData, orphanPostings } from './guest-data';
+import { deleteGuestData, lockBundles, orphanPostings } from './guest-data';
 
 const GUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const SIM_KEEP_MS = 60 * 24 * 60 * 60 * 1000;
@@ -58,6 +58,13 @@ export class PurgeService {
     // Raw, with subselects: a busy sim leaves far more rows than a bind list holds.
     await this.prisma.$transaction(async (tx) => {
       const sim = Prisma.sql`(SELECT "id" FROM "Device" WHERE "isSimulated")`;
+      // Only a row the worker may still settle (unapplied or held) needs its
+      // bundle locked first; the rest are done with.
+      await lockBundles(
+        tx,
+        Prisma.sql`"code" IN (SELECT "bundleCode" FROM "ScanInbox"
+          WHERE "deviceId" IN ${sim} AND "receivedAt" < ${before} AND ("result" IS NULL OR "result" = 'held'))`,
+      );
       await tx.$executeRaw`DELETE FROM "HeldEvent" WHERE "inboxId" IN
         (SELECT "id" FROM "ScanInbox" WHERE "deviceId" IN ${sim} AND "receivedAt" < ${before})`;
       await tx.$executeRaw`DELETE FROM "ScanInbox" WHERE "deviceId" IN ${sim} AND "receivedAt" < ${before}`;

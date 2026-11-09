@@ -3,6 +3,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import request from 'supertest';
+import { ApplyService } from '../src/apply/apply.service';
 import { FixedClock } from '../src/clock';
 import { POLO_ROUTE } from '../src/line/line';
 import { bootApi, bootWorker, makeGuest, purgeQueues, resetDb, until } from './helpers';
@@ -212,6 +213,37 @@ describe('admin reads and writes', () => {
     expect(res.body[0]).toMatchObject({ action: 'rate_change', actor: 'tahmid' });
     const all = (await get('/admin/audit').expect(200)).body;
     expect(all.length).toBeLessThanOrEqual(100);
+  });
+
+  // The worker holds the bundle and has yet to settle its inbox row when the
+  // reset starts. The reset must wait for the bundle, not take the inbox row
+  // first and deadlock with the worker.
+  it('resets while the worker is mid-apply on a guest bundle without a deadlock', async () => {
+    const g = await makeGuest(api, clock, ['S-07']);
+    const service = worker.get(ApplyService);
+    const handle = (service as any).handle.bind(service);
+    let entered!: () => void;
+    const inHandle = new Promise<void>((r) => (entered = r));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const spy = jest.spyOn(service as any, 'handle').mockImplementationOnce(async (...args: unknown[]) => {
+      entered();
+      await held;
+      return handle(...args);
+    });
+    const apply = jest.spyOn(service, 'apply');
+    await g.batch('S-07', [g.ev(1, g.codes[0], 'sew_collar', 1000)]).expect(201);
+    await inHandle;
+
+    const reset = post('/admin/reset').then((r) => r);
+    await new Promise((r) => setTimeout(r, 500));
+    release();
+    expect((await reset).status).toBe(201);
+    await until(async () => apply.mock.results.length > 0);
+    await expect(apply.mock.results[0].value).resolves.toBe('applied');
+    expect(await prisma.bundle.count({ where: { code: g.codes[0] } })).toBe(0);
+    spy.mockRestore();
+    apply.mockRestore();
   });
 
   it('resets guest and sim data of this month, keeps earlier months, audit and line data', async () => {

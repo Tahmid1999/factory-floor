@@ -6,7 +6,7 @@ import { CLOCK, Clock } from '../clock';
 import { deviceLabel, HoodService } from '../hood/hood';
 import { POLO_ROUTE, STYLE_CODE } from '../line/line';
 import { PrismaService } from '../prisma.service';
-import { deleteGuestData, orphanPostings } from '../purge/guest-data';
+import { deleteGuestData, lockBundles, orphanPostings } from '../purge/guest-data';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_MS = 5 * 60 * 1000;
@@ -278,6 +278,13 @@ export class AdminService {
         const simBundles = Prisma.sql`(SELECT "id" FROM "Bundle"
           WHERE "isSimulated" AND "guestId" IS NULL AND "createdAt" >= ${monthStart})`;
         const simDevices = Prisma.sql`(SELECT "id" FROM "Device" WHERE "isSimulated")`;
+        // Every bundle whose rows go below, before any of them: the sim keeps
+        // applying while this runs.
+        await lockBundles(
+          tx,
+          Prisma.sql`"guestId" IS NOT NULL OR "id" IN ${simBundles} OR "code" IN
+            (SELECT "bundleCode" FROM "ScanInbox" WHERE "deviceId" IN ${simDevices} AND "receivedAt" >= ${monthStart})`,
+        );
         const guests = await tx.guest.findMany({ select: { id: true } });
         const guestIds = guests.map((g) => g.id);
         await tx.$executeRaw`DELETE FROM "Posting"
