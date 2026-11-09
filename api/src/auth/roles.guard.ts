@@ -19,7 +19,7 @@ function deny(status: number, error: string): never {
   throw new HttpException({ error }, status);
 }
 
-function readAdminCookie(req: Request): { login: string; role: Role } | null {
+export function readAdminCookie(req: Request): { login: string; role: Role } | null {
   const token = req.cookies?.[ADMIN_COOKIE];
   if (typeof token !== 'string') return null;
   try {

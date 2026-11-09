@@ -140,6 +140,16 @@ describe('roles, admin login and audit', () => {
     await http().get('/t/held').set('Cookie', cookie).expect(200);
   });
 
+  it('tells the page who is logged in, and says nothing for anyone else', async () => {
+    const cookie = await loginCookie();
+    const res = await http().get('/admin/session').set('Cookie', cookie).expect(200);
+    expect(res.body).toEqual({ login: 'tahmid', role: 'admin' });
+    const anon = await http().get('/admin/session').expect(200);
+    expect(anon.text).toBe('');
+    const forged = await http().get('/admin/session').set('Cookie', 'ff_admin=not.a.jwt').expect(200);
+    expect(forged.text).toBe('');
+  });
+
   it('ends the session on logout', async () => {
     const res = await http().post('/admin/logout').expect(200);
     expect(res.headers['set-cookie'][0]).toMatch(/^ff_admin=;/);

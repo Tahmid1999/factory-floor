@@ -1,11 +1,11 @@
-import { Body, Controller, HttpCode, HttpException, Inject, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, Inject, Post, Req, Res } from '@nestjs/common';
 import bcrypt from 'bcryptjs';
 import type { CookieOptions, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { CLOCK, Clock } from '../clock';
 import { hit, refund } from '../limits';
 import { PrismaService } from '../prisma.service';
-import { ADMIN_COOKIE, adminSecret } from './roles.guard';
+import { ADMIN_COOKIE, adminSecret, readAdminCookie } from './roles.guard';
 
 const HOUR_MS = 60 * 60 * 1000;
 const SESSION_HOURS = 12;
@@ -61,6 +61,13 @@ export class AdminAuthController {
     });
     res.cookie(ADMIN_COOKIE, token, { ...cookieOptions(), maxAge: SESSION_HOURS * HOUR_MS });
     return { login: user.login, role: user.role };
+  }
+
+  // The cookie is httpOnly, so the page cannot tell it is logged in without
+  // asking. null for anyone else, never an error, so the page can poll it.
+  @Get('session')
+  session(@Req() req: Request) {
+    return readAdminCookie(req);
   }
 
   @Post('logout')
