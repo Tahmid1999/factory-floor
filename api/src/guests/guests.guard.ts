@@ -2,7 +2,8 @@ import { CanActivate, ExecutionContext, Inject, Injectable } from '@nestjs/commo
 import { Guest } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { Actor } from './ownership';
-import { GuestsService, isLoopback } from './guests.service';
+import { GuestsService } from './guests.service';
+import { isSimCaller } from './sim-caller';
 
 export const GUEST_COOKIE = 'ff_guest';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -17,10 +18,10 @@ export class GuestGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<GuestRequest>();
     const res = ctx.switchToHttp().getResponse<Response>();
 
-    // The sim is trusted only with the key and only from this machine; it
+    // The sim is trusted only with the key and only from the worker's own address; it
     // never gets a guest and never counts against the per-ip guest limit.
     const key = req.header('x-sim-key');
-    if (key && key === process.env.SIM_KEY && isLoopback(req.ip)) {
+    if (isSimCaller(key, req.socket.remoteAddress, req.headers)) {
       req.actor = { sim: true };
       return true;
     }

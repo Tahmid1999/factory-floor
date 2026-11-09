@@ -2,7 +2,7 @@ import { BadRequestException, Controller, Get, Inject, NotFoundException, Query,
 import { BundleStatus } from '@prisma/client';
 import type { Request } from 'express';
 import { CLOCK, Clock } from '../clock';
-import { isLoopback } from '../guests/guests.service';
+import { isSimCaller } from '../guests/sim-caller';
 import { mayScan } from '../guests/ownership';
 import { POLO_ROUTE, STATIONS, StationCode } from '../line/line';
 import { canFlag } from '../line/state-machine';
@@ -30,7 +30,7 @@ export class SimWorkController {
   @Get('work')
   async work(@Req() req: Request, @Query('station') station?: string) {
     const key = req.header('x-sim-key');
-    if (!key || key !== process.env.SIM_KEY || !isLoopback(req.ip)) throw new NotFoundException();
+    if (!isSimCaller(key, req.socket.remoteAddress, req.headers)) throw new NotFoundException();
     if (!station || !Object.prototype.hasOwnProperty.call(STATIONS, station)) {
       throw new BadRequestException({ error: 'unknown station' });
     }

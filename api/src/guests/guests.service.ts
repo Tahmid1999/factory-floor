@@ -40,14 +40,6 @@ export function hashIp(ip: string): string {
     .digest('hex');
 }
 
-// Loopback only: behind the proxy a remote client shows up as its forwarded
-// address, so a sim key sent from outside never passes this check.
-export function isLoopback(ip: string | undefined): boolean {
-  if (!ip) return false;
-  const bare = ip.replace(/^::ffff:/, '');
-  return bare === '::1' || bare.startsWith('127.');
-}
-
 @Injectable()
 export class GuestsService {
   constructor(

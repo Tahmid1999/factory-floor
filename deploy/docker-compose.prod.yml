@@ -84,6 +84,7 @@ services:
       <<: *api-env
       HOST: 0.0.0.0
       TRUST_PROXY: loopback, 10.241.2.1
+      SIM_TRUSTED_ADDR: 10.241.2.10
       WEB_ORIGIN: ${WEB_ORIGIN:-https://factory.tahmidalavi.com}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
@@ -92,33 +93,34 @@ services:
       retries: 6
       start_period: 20s
 
-  # The simulator calls the API with x-sim-key, and the API honours that header
-  # only when the request comes from loopback. A call through the published port
-  # would arrive from the Docker gateway and be refused, so the worker joins
-  # the API container's network namespace and reaches it on its own 127.0.0.1.
-  # It therefore publishes nothing, and reaches Postgres and RabbitMQ through
-  # the API's network. The worker exits when RabbitMQ is down at boot, so the
-  # restart policy and the healthy dependencies bring it back. restart: true
-  # recreates it whenever compose recreates the API, because a namespace is
-  # gone once its owner restarts.
+  # The simulator calls the API with x-sim-key. The API accepts that key only
+  # from loopback or from SIM_TRUSTED_ADDR, judged on the socket peer, and never
+  # when X-Forwarded-For is present. The worker is its own container on a pinned
+  # address (10.241.2.10) so it reaches the API by name and survives an API
+  # restart; sharing the API's network namespace left it deaf after one. Its
+  # address must not be the gateway (10.241.2.1): Caddy's traffic arrives from
+  # there, and the API refuses to boot if SIM_TRUSTED_ADDR names it. The worker
+  # exits when RabbitMQ is down at boot, so the restart policy and the healthy
+  # dependencies bring it back.
   worker:
     image: factory-floor-api
     command: ["node", "dist/worker"]
-    network_mode: "service:api"
     restart: unless-stopped
     mem_limit: 192m
     depends_on:
       api:
         condition: service_healthy
-        restart: true
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    networks:
+      default:
+        ipv4_address: 10.241.2.10
     environment:
       <<: *api-env
       NODE_OPTIONS: --max-old-space-size=${WORKER_OLD_SPACE_MB:-130}
-      API_INTERNAL_URL: http://127.0.0.1:4120
+      API_INTERNAL_URL: http://api:4120
 
   # One-off jobs, run by deploy.sh with `compose run --rm`. They are in a
   # profile so `up` never starts them. Only migrate holds the ff_owner
