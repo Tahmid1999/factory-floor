@@ -4,7 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CoreModule } from './core.module';
 import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
-import { Rabbit } from './rabbit';
+import { IngestModule } from './ingest/ingest.module';
 
 @Module({
   imports: [
@@ -12,8 +12,8 @@ import { Rabbit } from './rabbit';
     ScheduleModule.forRoot(),
     CoreModule,
     GuestsModule,
+    IngestModule,
   ],
   controllers: [HealthController],
-  providers: [Rabbit],
 })
 export class AppModule {}
