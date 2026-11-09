@@ -1,10 +1,10 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { wasteOf, wasteOfMany } from '../src/apply/waste';
 import { POLO_ROUTE } from '../src/line/line';
 import { resetDb } from './helpers';
 
 describe('wasteOfMany', () => {
-  let prisma: PrismaClient;
+  let prisma: PrismaClient<Prisma.PrismaClientOptions, 'query'>;
   let queries = 0;
 
   beforeAll(async () => {
