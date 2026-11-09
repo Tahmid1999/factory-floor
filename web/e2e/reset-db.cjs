@@ -5,6 +5,9 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 require('dotenv').config({ path: path.join(root, '.env'), quiet: true });
 
+// The trap spec runs this alone, so the admin user comes from here too.
+Object.assign(process.env, require('./admin-env.cjs'));
+
 const api = path.join(root, 'api');
 const { PrismaClient } = require(require.resolve('@prisma/client', { paths: [api] }));
 const { seedLine } = require(path.join(api, 'dist/seed.js'));

@@ -12,6 +12,7 @@ const env = {
   SIM_ENABLED: '0',
   WEB_ORIGIN: 'http://localhost:3140',
   PORT: '4120',
+  ...require('./admin-env.cjs'),
 };
 
 function run(cmd, args, cwd) {

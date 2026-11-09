@@ -89,16 +89,19 @@ function Writes({ ops }: { ops: Op[] }) {
       <Button
         size="small"
         disabled={!op || !mills}
-        onClick={() =>
-          run(
+        onClick={() => {
+          // A minute ahead, so it cannot tie with a rate already starting now
+          // and nothing already posted is repriced.
+          const effective = new Date(Date.now() + 60_000);
+          return run(
             () =>
               adminCall('/admin/rates', {
                 method: 'POST',
-                body: JSON.stringify({ op, ratePerPieceMills: mills, effectiveFrom: new Date().toISOString() }),
+                body: JSON.stringify({ op, ratePerPieceMills: mills, effectiveFrom: effective.toISOString() }),
               }),
-            `${op} rate set to ${mills} mills`,
-          )
-        }
+            `${op} ${mills} mills from ${effective.toLocaleTimeString('en-GB')}`,
+          );
+        }}
       >
         Set rate
       </Button>

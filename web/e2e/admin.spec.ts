@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { closeGuests, flash, guestPage, scanButton, stationLabel } from './helpers';
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const adminEnv = require('./admin-env.cjs') as { ADMIN_PASSWORD: string };
+
 test.afterAll(closeGuests);
 
 const OPS = ['cut', 'sew_collar', 'sew_sleeve', 'side_seam', 'hem', 'qc_final', 'pack', 'ship'];
@@ -105,6 +108,22 @@ test('rate and reset appear only when the session says admin', async ({ page }) 
   await expect(page.getByRole('button', { name: 'Set rate' })).toBeVisible();
 });
 
+test('polling rides out server errors and recovers without navigation', async ({ page }) => {
+  let failures = 0;
+  await page.route('**/admin/floor**', (route) => {
+    if (failures < 2) {
+      failures++;
+      return route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"bad gateway"}' });
+    }
+    return route.continue();
+  });
+  await page.goto('/admin');
+  await expect(page.getByText('offline · retrying')).toBeVisible();
+  await expect(page.locator('[data-row]')).toHaveCount(8, { timeout: 20_000 });
+  await expect(page.getByText('offline · retrying')).toHaveCount(0);
+  expect(failures).toBe(2);
+});
+
 test('CSP: admin and hood allow the portfolio, everything else refuses framing', async ({ request }) => {
   for (const path of ['/admin', '/admin/bundles', '/hood']) {
     const res = await request.get(path);
@@ -112,4 +131,33 @@ test('CSP: admin and hood allow the portfolio, everything else refuses framing',
   }
   const root = await request.get('/');
   expect(root.headers()['content-security-policy']).toBe("frame-ancestors 'none'");
+});
+
+test('the owner logs in, sets a rate and resets the demo, both audited', async ({ page }) => {
+  // Reset deletes guests, and an open station page would keep touching them.
+  await closeGuests();
+  await page.goto('/admin/login');
+  await page.getByPlaceholder('login').fill('tahmid');
+  await page.getByPlaceholder('password').fill(adminEnv.ADMIN_PASSWORD);
+  await page.getByRole('button', { name: 'Log in' }).click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(page.getByRole('button', { name: 'Reset demo' })).toBeVisible();
+
+  await page.locator('.adm-write .ant-select').click();
+  await page.getByTitle('hem').click();
+  await page.getByPlaceholder('mills / pc').fill('9');
+  await page.getByRole('button', { name: 'Set rate' }).click();
+  await expect(page.locator('.adm-write')).toContainText('hem 9 mills from');
+  // It starts a minute ahead, so the table still shows the old rate.
+  await expect(page.locator('[data-row="hem"] [data-col="rate"]')).toHaveText('$0.008');
+
+  await page.getByRole('button', { name: 'Reset demo' }).click();
+  await page.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect(page.locator('.adm-write')).toContainText('reset done');
+
+  await page.getByRole('link', { name: 'Audit' }).click();
+  const rate = page.locator('.ant-table-tbody tr', { hasText: 'rate_change' });
+  await expect(rate).toContainText('rate:hem');
+  await expect(rate).toContainText('tahmid');
+  await expect(page.locator('.ant-table-tbody tr', { hasText: 'guest and sim data' })).toContainText('reset');
 });
