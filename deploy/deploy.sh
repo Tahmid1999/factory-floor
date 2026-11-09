@@ -23,3 +23,6 @@ $compose run --rm seed
 # only has to be running.
 $compose up -d --wait api worker
 $compose ps
+# Each deploy builds a new image and leaves the last one dangling; a small VM
+# runs out of disk after a few dozen.
+docker image prune -f
