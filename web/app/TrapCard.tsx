@@ -273,7 +273,7 @@ export function TrapCard({ floor }: { floor: Floor }) {
         {lines[0] && <p className="step-line mono">{lines[0]}</p>}
         <ol>
           <li className={step === 1 ? 'now' : undefined}>
-            <span>Q-01 loses wifi for {dropSecs} s. I flag the collar.</span>
+            <span>Q-01 loses wifi for {dropSecs} s. Flag the collar.</span>
             <button disabled={step !== 1 || busy || held} onClick={() => void qcTap()}>
               defect: collar
             </button>
@@ -286,7 +286,7 @@ export function TrapCard({ floor }: { floor: Floor }) {
             {qcLeft > 0 && <span className="step-line mono">Q-01 wifi back in {qcLeft} s</span>}
           </li>
           <li className={step === 2 ? 'now' : undefined}>
-            <span>S-08 is online and sews the sleeve.</span>
+            <span>S-08 is online. Scan the bundle there to sew the sleeve.</span>
             <button disabled={step !== 2 || busy} onClick={() => void sleeveTap()}>
               scan {c} at S-08
             </button>
@@ -298,7 +298,7 @@ export function TrapCard({ floor }: { floor: Floor }) {
             </span>
           </li>
           <li className={step === 4 || step === 5 ? 'now' : undefined}>
-            <span>The supervisor clears it and S-07 redoes the collar.</span>
+            <span>As the supervisor, clear the rework. Then redo the collar at S-07.</span>
             <button disabled={step !== 4 || busy} onClick={() => void clearTap()}>
               clear rework → sew_collar
             </button>
