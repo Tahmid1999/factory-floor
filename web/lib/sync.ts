@@ -53,6 +53,9 @@ class Loop {
   private lastSentAt = 0;
   private last: SyncStatus['last'] = null;
   private retry: SyncStatus['retry'] = null;
+  private stopped = false;
+  private inFlight: AbortController | null = null;
+  private readonly unsubscribe: () => void;
 
   constructor(
     readonly deviceId: string,
@@ -60,7 +63,7 @@ class Loop {
     public handlers: Handlers,
   ) {
     // Back online: no reason to sit out the rest of a 30 s backoff.
-    onNetChange(() => {
+    this.unsubscribe = onNetChange(() => {
       if (this.failures > 0 && !offline(this.station)) this.schedule(0);
     });
     // Whatever survived a reload goes at once.
@@ -80,8 +83,19 @@ class Loop {
     this.schedule(DEBOUNCE_MS);
   }
 
+  // A stopped loop sends nothing more and reports nothing more, even if a
+  // reply was already on its way.
+  stop() {
+    this.stopped = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.inFlight?.abort();
+    this.unsubscribe();
+  }
+
   private schedule(ms: number) {
     if (this.timer) clearTimeout(this.timer);
+    if (this.stopped) return;
     const wait = Math.max(ms, this.lastSentAt + MIN_GAP_MS - Date.now());
     this.timer = setTimeout(() => void this.run(), wait);
   }
@@ -95,6 +109,7 @@ class Loop {
     this.again = false;
     let next = HEARTBEAT_MS;
     const ctl = new AbortController();
+    this.inFlight = ctl;
     const timer = setTimeout(() => ctl.abort(), BATCH_TIMEOUT_MS);
     try {
       const events = (await pending(this.deviceId)).slice(0, MAX_EVENTS);
@@ -124,7 +139,7 @@ class Loop {
       this.failures = 0;
       this.retry = null;
       this.last = { at: t1, events: events.length, http: res.status };
-      this.handlers.onReply({ deviceId: this.deviceId, station: this.station, sent: events, reply, flushed, at: t1 });
+      if (!this.stopped) this.handlers.onReply({ deviceId: this.deviceId, station: this.station, sent: events, reply, flushed, at: t1 });
     } catch (e) {
       this.failures += 1;
       next = backoffMs(this.failures);
@@ -133,7 +148,8 @@ class Loop {
       this.retry = { at: Date.now() + next, tryNo: this.failures + 1, why };
     } finally {
       clearTimeout(timer);
-      const left = await this.publish();
+      this.inFlight = null;
+      const left = this.stopped ? 0 : await this.publish();
       if (this.failures === 0 && (this.again || left > 0)) next = 0;
       this.busy = false;
       this.schedule(next);
@@ -171,4 +187,14 @@ export function startSync(deviceId: string, station: string, handlers: Handlers)
 
 export function kick(deviceId: string) {
   loops.get(deviceId)?.kick();
+}
+
+export function stopSync(deviceId: string) {
+  loops.get(deviceId)?.stop();
+  loops.delete(deviceId);
+}
+
+// For tests that run several loops in one process; a page's loops end with the page.
+export function stopAllSync() {
+  for (const id of [...loops.keys()]) stopSync(id);
 }

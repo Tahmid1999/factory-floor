@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { expect, test } from '@playwright/test';
 import { dropBundle, enqueue, floorSeq, pending } from '../lib/queue';
-import { SyncResult, SyncStatus, startSync } from '../lib/sync';
+import { SyncResult, SyncStatus, startSync, stopAllSync } from '../lib/sync';
 
 // No browser here: the queue and the sync loop run in Node against an
 // in-memory IndexedDB, with fetch replaced, so the cases that a real server
@@ -16,8 +16,33 @@ const scan = (bundleCode: string, round: number) => ({
 });
 
 const realFetch = globalThis.fetch;
+// Stop the loops before fetch is real again, or their heartbeats would reach
+// the API on 4120 and make guests that take bundle codes from the next spec.
 test.afterEach(() => {
+  stopAllSync();
   globalThis.fetch = realFetch;
+});
+
+test('a stopped loop sends nothing more', async () => {
+  await floorSeq('dev-e', 0);
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ serverNow: Date.now(), results: [], resync: [], notices: [] }), {
+      status: 201,
+    });
+  };
+  let loop: { kick(): void } | undefined;
+  await new Promise<void>((onReply) => {
+    loop = startSync('dev-e', 'S-08', { onReply: () => onReply(), onStatus: () => undefined });
+  });
+  stopAllSync();
+  const seen = calls;
+  // A scan after the stop: a live loop would send it within the 300 ms debounce.
+  await enqueue('dev-e', scan('B-5', 0));
+  loop!.kick();
+  await new Promise((r) => setTimeout(r, 1500));
+  expect(calls).toBe(seen);
 });
 
 test('a device with no seq counter cannot enqueue, and the server floor only raises it', async () => {
