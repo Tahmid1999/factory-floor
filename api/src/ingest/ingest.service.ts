@@ -16,11 +16,12 @@ export type BatchReply = {
   serverNow: number;
   results: Verdict[];
   resync: Resync[];
-  notices: { seq: number; bundleCode: string; result: string }[];
+  notices: { id: string; seq: number; bundleCode: string; result: string }[];
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FUTURE_SLACK_MS = 60 * 1000;
+const NOTICE_REPEAT_MS = 60 * 1000;
 const INT32_MAX = 2 ** 31 - 1;
 
 // These are decided at a gate call, which answers at once; queueing them would
@@ -90,7 +91,19 @@ export class IngestService {
           ON CONFLICT ("deviceId", "seq") DO NOTHING
           RETURNING "id"`);
         if (inserted.length === 0) {
-          results.push({ seq: e.seq, result: 'duplicate' });
+          // A resend after a lost reply must get the same answer as the first
+          // time, or the station never learns the scan was rejected.
+          const first = await tx.scanInbox.findUnique({
+            where: { deviceId_seq: { deviceId: device.id, seq: e.seq } },
+            select: { result: true },
+          });
+          const rejected = first?.result?.match(/^rejected\((.+)\)$/);
+          if (rejected) {
+            resync.set(bundle.code, resyncOf(bundle));
+            results.push({ seq: e.seq, result: 'rejected', reason: rejected[1] });
+          } else {
+            results.push({ seq: e.seq, result: 'duplicate' });
+          }
           continue;
         }
 
@@ -106,12 +119,17 @@ export class IngestService {
         }
       }
 
-      // One statement both selects and marks them, so two batches racing each
-      // other cannot deliver the same notice twice.
-      const notices = await tx.$queryRaw<{ seq: number; bundleCode: string; result: string }[]>(Prisma.sql`
+      // A reply can be lost after commit, so a notice is repeated for a
+      // minute and the station ignores ids it has already shown. Only the
+      // undelivered ones are stamped; the update runs first so they are
+      // returned by the read below, and two racing batches cannot both stamp.
+      await tx.$executeRaw(Prisma.sql`
         UPDATE "DeviceNotice" SET "deliveredAt" = ${now}
-        WHERE "deviceId" = ${device.id} AND "deliveredAt" IS NULL
-        RETURNING "seq", "bundleCode", "result"`);
+        WHERE "deviceId" = ${device.id} AND "deliveredAt" IS NULL`);
+      const notices = await tx.$queryRaw<{ id: string; seq: number; bundleCode: string; result: string }[]>(Prisma.sql`
+        SELECT "id", "seq", "bundleCode", "result" FROM "DeviceNotice"
+        WHERE "deviceId" = ${device.id} AND "deliveredAt" >= ${new Date(nowMs - NOTICE_REPEAT_MS)}
+        ORDER BY "createdAt", "seq"`);
       const missing = [...new Set(notices.map((n) => n.bundleCode))].filter((c) => !resync.has(c));
       if (missing.length > 0) {
         for (const b of await tx.bundle.findMany({ where: { code: { in: missing } } })) {

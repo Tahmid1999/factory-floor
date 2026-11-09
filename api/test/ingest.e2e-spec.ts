@@ -185,22 +185,44 @@ describe('batch ingest', () => {
     expect(seqs).toEqual([6]);
   });
 
-  it('delivers a notice once and not on the next heartbeat, and resyncs its bundle', async () => {
+  it('repeats a notice with the same id for 60 s after delivery, then stops', async () => {
     const s = await station();
     await prisma.deviceNotice.create({
       data: { deviceId: s.deviceId, seq: 7, bundleCode: s.codes[2], result: 'rework' },
     });
-    const hb = { deviceId: s.deviceId, deviceNow: now(), events: [] };
-    const first = await s.send(hb).expect(201);
-    expect(first.body.notices).toEqual([{ seq: 7, bundleCode: s.codes[2], result: 'rework' }]);
+    const hb = () => ({ deviceId: s.deviceId, deviceNow: now(), events: [] });
+    const first = await s.send(hb()).expect(201);
+    expect(first.body.notices).toEqual([
+      { id: expect.any(String), seq: 7, bundleCode: s.codes[2], result: 'rework' },
+    ]);
     expect(first.body.resync).toEqual([{ bundleCode: s.codes[2], status: 'active', nextOp: 'sew_collar', round: 0 }]);
     expect(first.body.results).toEqual([]);
+    const stamped = (await prisma.deviceNotice.findFirstOrThrow({ where: { deviceId: s.deviceId } })).deliveredAt;
+    clock.advance(30_000);
+    const second = await s.send(hb()).expect(201);
+    expect(second.body.notices).toEqual(first.body.notices);
+    expect(second.body.resync).toHaveLength(1);
+    expect((await prisma.deviceNotice.findFirstOrThrow({ where: { deviceId: s.deviceId } })).deliveredAt).toEqual(stamped);
+    clock.advance(31_000);
+    const third = await s.send(hb()).expect(201);
+    expect(third.body.notices).toEqual([]);
+    expect(third.body.resync).toEqual([]);
+  });
+
+  it('answers a resent rejected(rework) event as rejected again, with the bundle in resync', async () => {
+    const s = await station();
+    await prisma.bundle.update({ where: { code: s.codes[0] }, data: { status: 'rework', reworkRound: 1 } });
+    const body = { deviceId: s.deviceId, deviceNow: now(), events: [ev(1, s.codes[0]), ev(2, s.codes[1])] };
+    const first = await s.send(body).expect(201);
     clock.advance(1000);
-    const second = await s.send(hb).expect(201);
-    expect(second.body.notices).toEqual([]);
-    expect(second.body.resync).toEqual([]);
-    const notice = await prisma.deviceNotice.findFirstOrThrow({ where: { deviceId: s.deviceId } });
-    expect(notice.deliveredAt).not.toBeNull();
+    const second = await s.send(body).expect(201);
+    expect(first.body.results[0]).toEqual({ seq: 1, result: 'rejected', reason: 'rework' });
+    expect(second.body.results).toEqual([
+      { seq: 1, result: 'rejected', reason: 'rework' },
+      { seq: 2, result: 'duplicate' },
+    ]);
+    expect(second.body.resync).toEqual([{ bundleCode: s.codes[0], status: 'rework', nextOp: 'sew_collar', round: 1 }]);
+    expect(await prisma.scanInbox.count({ where: { deviceId: s.deviceId } })).toBe(2);
   });
 
   it('still answers accepted and leaves result null when the publish fails', async () => {
