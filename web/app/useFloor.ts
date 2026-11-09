@@ -3,17 +3,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, Me, MeBundle, Mode, Verdict, getMe, putMode, refill, registerDevice } from '../lib/api';
 import { GateBody, GateReply, gateScan, newGateId } from '../lib/gate';
-import { STATION_CODES, STATIONS, StationCode, labourMills, routeIndex, ROUTE, stepCostMills } from '../lib/line';
+import { STATION_CODES, STATIONS, StationCode, routeIndex, ROUTE } from '../lib/line';
 import { offline, onNetChange } from '../lib/net';
 import {
+  Unseen,
   WorkRow,
+  addUnseen,
   addWork,
+  allUnseen,
   dropWork,
   enqueue,
+  floorSeq,
   getMeta,
   getOffset,
+  hasSeq,
   pendingAll,
   setMeta,
+  takeUnseen,
   workSince,
 } from '../lib/queue';
 import { SyncResult, SyncStatus, kick, startSync } from '../lib/sync';
@@ -32,6 +38,18 @@ function startOfToday(): number {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+// Priced from what /me last said, so a rate the admin changes reaches the
+// phone with the next refresh. A cached /me from before rates were sent
+// prices nothing rather than guess.
+function labourOf(me: Me | null, code: string, op: string): number {
+  const pieces = me?.bundles.find((b) => b.code === code)?.pieces ?? 0;
+  return (me?.rates?.[op] ?? 0) * pieces;
+}
+
+function costOf(me: Me | null, code: string, op: string): number {
+  return labourOf(me, code, op) + (me?.trims?.[op] ?? 0);
 }
 
 function readCachedMe(): Me | null {
@@ -86,6 +104,8 @@ export function useFloor() {
   const [gateCheck, setGateCheck] = useState<string | null>(null);
   const [resyncInfo, setResyncInfo] = useState<ResyncInfo | null>(null);
   const [log, setLog] = useState<string[]>([]);
+  const [unseen, setUnseen] = useState<Record<string, Unseen[]>>({});
+  const [trapRunning, setTrapRunning] = useState(false);
   const [, setTick] = useState(0);
 
   const meRef = useRef<Me | null>(null);
@@ -161,11 +181,26 @@ export function useFloor() {
       ]);
 
       const bad = [
-        ...rejected.map((v) => ({ op: codeOf.get(v.seq)?.op ?? '', code: codeOf.get(v.seq)?.bundleCode ?? '?', reason: v.reason })),
-        ...r.flushed.map((e) => ({ op: e.op, code: e.bundleCode, reason: 'rework' })),
-        ...lateRejected.map((n) => ({ op: '', code: n.bundleCode, reason: n.result.slice(9, -1) })),
+        ...rejected.map((v) => ({
+          seq: v.seq,
+          op: codeOf.get(v.seq)?.op ?? '',
+          code: codeOf.get(v.seq)?.bundleCode ?? '?',
+          reason: v.reason,
+        })),
+        ...r.flushed.map((e) => ({ seq: e.seq, op: e.op, code: e.bundleCode, reason: 'rework' })),
+        ...lateRejected.map((n) => ({ seq: n.seq, op: '', code: n.bundleCode, reason: n.result.slice(9, -1) })),
       ];
-      if (bad.length === 0 || r.station !== stationRef.current) return;
+      if (bad.length === 0) return;
+      // Not looking at that station: keep them until it is opened.
+      if (r.station !== stationRef.current) {
+        setUnseen(
+          await addUnseen(
+            r.deviceId,
+            bad.map((b) => ({ seq: b.seq, bundleCode: b.code, reason: b.reason ?? '?' })),
+          ),
+        );
+        return;
+      }
       const codes = [...new Set(bad.map((b) => b.code))];
       const reasons = new Set(bad.map((b) => b.reason));
       const why = reasons.size === 1 && reasons.has('rework') ? 'went to rework' : [...reasons].join(', ');
@@ -179,7 +214,9 @@ export function useFloor() {
         station: r.station,
         dropped: bad.length,
         codes,
-        avoidedMills: bad.filter((b) => b.reason === 'rework').reduce((s, b) => s + stepCostMills(b.op), 0),
+        avoidedMills: bad
+          .filter((b) => b.reason === 'rework')
+          .reduce((s, b) => s + costOf(meRef.current, b.code, b.op), 0),
       });
     },
     [addLog, patchBundle, refreshWork],
@@ -196,8 +233,12 @@ export function useFloor() {
       if (!name) throw new Error('no guest yet');
       const key = `device:${name}:${st}`;
       let id = await getMeta<string>(key);
-      if (!id) {
-        id = (await registerDevice(st)).deviceId;
+      // Registering is idempotent and answers with the last seq the server
+      // holds, so a counter lost with the browser's storage starts above it.
+      if (!id || !(await hasSeq(id))) {
+        const reg = await registerDevice(st);
+        id = reg.deviceId;
+        await floorSeq(id, reg.lastSeq);
         await setMeta(key, id);
       }
       devicesRef.current = { ...devicesRef.current, [st]: id };
@@ -242,12 +283,16 @@ export function useFloor() {
       for (const st of STATION_CODES) {
         const id = await getMeta<string>(`device:${m.name}:${st}`);
         if (!id) continue;
-        devicesRef.current = { ...devicesRef.current, [st]: id };
+        // The queue drains either way; scanning waits for a known seq.
         startSync(id, st, handlers);
+        if (await hasSeq(id)) devicesRef.current = { ...devicesRef.current, [st]: id };
       }
       setDevices(devicesRef.current);
+      setUnseen(await allUnseen());
       await refreshWork();
-      await ensureDevice(stationRef.current).catch(() => undefined);
+      await ensureDevice(stationRef.current)
+        .then(() => openUnseen(stationRef.current))
+        .catch(() => undefined);
     })();
     // Boot runs once; the handlers it hands out are stable.
   }, []);
@@ -267,6 +312,22 @@ export function useFloor() {
     return () => clearInterval(t);
   }, [refreshMe]);
 
+  // Opening a station is where its operator sees what was rejected meanwhile.
+  const openUnseen = useCallback(async (st: StationCode) => {
+    const id = devicesRef.current[st];
+    if (!id) return;
+    const { taken, all } = await takeUnseen(id);
+    setUnseen(all);
+    if (taken.length === 0 || stationRef.current !== st) return;
+    const reasons = [...new Set(taken.map((u) => u.reason))].join(', ');
+    setFlash({
+      tone: 'resync',
+      title: 'RESYNC',
+      detail: `${taken.length} scan${taken.length === 1 ? '' : 's'} rejected while you were away`,
+      sub: `${[...new Set(taken.map((u) => u.bundleCode))].join(', ')} · ${reasons}`,
+    });
+  }, []);
+
   const setStation = useCallback(
     (st: StationCode) => {
       stationRef.current = st;
@@ -274,9 +335,11 @@ export function useFloor() {
       setFlash({ tone: 'idle', title: 'ready' });
       setGateCheck(null);
       setResyncInfo(null);
-      void ensureDevice(st).catch(() => undefined);
+      void ensureDevice(st)
+        .then(() => openUnseen(st))
+        .catch(() => undefined);
     },
-    [ensureDevice],
+    [ensureDevice, openUnseen],
   );
 
   // A sewing scan is green the moment it is in IndexedDB. The network is the
@@ -285,7 +348,14 @@ export function useFloor() {
     async (st: StationCode, code: string, op: string): Promise<BatchScan> => {
       const t0 = performance.now();
       const deviceId = await ensureDevice(st);
-      const seq = await enqueue(deviceId, { bundleCode: code, op, scannedAt: Date.now(), offsetMs: await getOffset() });
+      const round = meRef.current?.bundles.find((b) => b.code === code)?.round ?? 0;
+      const seq = await enqueue(deviceId, {
+        bundleCode: code,
+        op,
+        scannedAt: Date.now(),
+        offsetMs: await getOffset(),
+        round,
+      });
       const greenAt = Date.now();
       const ms = Math.round(performance.now() - t0);
       setFlash({
@@ -299,7 +369,18 @@ export function useFloor() {
       kick(deviceId);
       let mills = 0;
       if (SEWING_OPS.has(op)) {
-        mills = await addWork({ deviceId, seq, bundleCode: code, op, station: st, at: greenAt }, labourMills(op));
+        mills = await addWork(
+          {
+            deviceId,
+            seq,
+            bundleCode: code,
+            op,
+            station: st,
+            pieces: meRef.current?.bundles.find((b) => b.code === code)?.pieces ?? 0,
+            at: greenAt,
+          },
+          labourOf(meRef.current, code, op),
+        );
         void refreshWork();
       }
       return { deviceId, seq, greenAt, mills, settled };
@@ -370,8 +451,21 @@ export function useFloor() {
     [bundles],
   );
 
+  // Rejections waiting at stations other than this one, by station.
+  const unseenAt = useMemo(() => {
+    const out: Partial<Record<StationCode, number>> = {};
+    for (const st of STATION_CODES) {
+      const id = devices[st];
+      if (id && st !== station && (unseen[id]?.length ?? 0) > 0) out[st] = unseen[id].length;
+    }
+    return out;
+  }, [devices, unseen, station]);
+
   return {
     me,
+    unseenAt,
+    trapRunning,
+    setTrapRunning,
     bootError,
     bundles,
     station,

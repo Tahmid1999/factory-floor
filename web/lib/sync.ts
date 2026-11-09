@@ -9,6 +9,10 @@ const HEARTBEAT_MS = 10_000;
 // The server takes 2 batches a second per device.
 const MIN_GAP_MS = 500;
 const MAX_EVENTS = 50;
+// A request that hangs would hold the loop for good. Giving up and resending
+// is safe: the server keys every event by (deviceId, seq) and answers a
+// resend as a duplicate.
+const BATCH_TIMEOUT_MS = 10_000;
 const BACKOFF_CAP_S = 30;
 
 export type SyncStatus = {
@@ -90,11 +94,14 @@ class Loop {
     this.busy = true;
     this.again = false;
     let next = HEARTBEAT_MS;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), BATCH_TIMEOUT_MS);
     try {
       const events = (await pending(this.deviceId)).slice(0, MAX_EVENTS);
       const t0 = Date.now();
       this.lastSentAt = t0;
-      const res = await postBatch({ deviceId: this.deviceId, deviceNow: t0, events }, this.station);
+      const wire = events.map(({ seq, bundleCode, op, scannedAt, offsetMs }) => ({ seq, bundleCode, op, scannedAt, offsetMs }));
+      const res = await postBatch({ deviceId: this.deviceId, deviceNow: t0, events: wire }, this.station, ctl.signal);
       const t1 = Date.now();
       if (res.status !== 201) {
         const body = await res.json().catch(() => ({}));
@@ -108,7 +115,12 @@ class Loop {
         reply.results.map((r) => r.seq),
       );
       const flushed: QueuedEvent[] = [];
-      for (const r of reply.resync) flushed.push(...(await dropBundle(this.deviceId, r.bundleCode)));
+      // Notices repeat with their resync for a minute, so a bundle back in work
+      // here may already be in a new round with scans of its own queued.
+      for (const r of reply.resync) {
+        const below = r.status === 'rework' || r.status === 'scrapped' ? undefined : r.round;
+        flushed.push(...(await dropBundle(this.deviceId, r.bundleCode, below)));
+      }
       this.failures = 0;
       this.retry = null;
       this.last = { at: t1, events: events.length, http: res.status };
@@ -116,9 +128,11 @@ class Loop {
     } catch (e) {
       this.failures += 1;
       next = backoffMs(this.failures);
-      const why = e instanceof ApiError ? `${e.status} ${e.message}` : 'no network';
+      const why =
+        e instanceof ApiError ? `${e.status} ${e.message}` : (e as Error).name === 'AbortError' ? 'timeout' : 'no network';
       this.retry = { at: Date.now() + next, tryNo: this.failures + 1, why };
     } finally {
+      clearTimeout(timer);
       const left = await this.publish();
       if (this.failures === 0 && (this.again || left > 0)) next = 0;
       this.busy = false;

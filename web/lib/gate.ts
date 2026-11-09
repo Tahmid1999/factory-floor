@@ -3,6 +3,8 @@ import { NetworkDown, netFetch } from './net';
 
 const TIMEOUT_MS = 2000;
 
+export const DEFECTS = ['collar', 'sleeve', 'seam', 'hem', 'stain'] as const;
+
 export type GateBody = {
   deviceId: string;
   gateId: string;

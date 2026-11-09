@@ -61,9 +61,22 @@ test.describe.serial('all async, then the clear', () => {
     await expect(page.getByText('B-8492 back at S-07 · round 1')).toBeVisible();
     await expect(stationLabel(page)).toHaveText('S-07 · sew collar');
 
-    await page.getByRole('button', { name: 'redo collar at S-07' }).click();
+    const redoReply = page.waitForResponse((r) => {
+      if (!r.url().endsWith('/scans/batch') || r.request().method() !== 'POST') return false;
+      const events = JSON.parse(r.request().postData() ?? '{}').events ?? [];
+      return events.some((e: { bundleCode: string; op: string }) => e.bundleCode === 'B-8492' && e.op === 'sew_collar');
+    });
+    await page.getByRole('button', { name: 'redo sew_collar at S-07' }).click();
+    expect((await (await redoReply).json()).results).toEqual([{ seq: expect.any(Number), result: 'accepted' }]);
     await expect(page.getByTestId('trap-redo')).toHaveText('$0.00 · rework, not paid again');
-    await expect(page.locator('[data-row="last sync"]')).toContainText('· 1 events · 201', { timeout: 3000 });
+
+    const me = await (await page.request.get('http://localhost:4120/me')).json();
+    expect(me.bundles.find((b: { code: string }) => b.code === 'B-8492')).toMatchObject({
+      status: 'active',
+      round: 1,
+      nextOp: 'sew_sleeve',
+      paid: { cut: 200, sew_collar: 300, sew_sleeve: 240 },
+    });
     // One collar posting for the bundle, from round 0; the redo posted nothing.
     await expect.poll(() => collarPostings('B-8492'), { timeout: 5000 }).toEqual([300]);
   });
@@ -89,4 +102,19 @@ test('hybrid: QC holds the bundle, S-08 is resynced and nothing is wasted', asyn
   await expect(flash(page)).toContainText('RESYNC', { timeout: 5000 });
   await expect(flash(page)).toContainText('1 scan rejected');
   await expect(page.getByTestId('trap-result')).toHaveText(/^stopped at S-08 in \d+\.\d s · \$0\.00 wasted$/);
+});
+
+test('hybrid: when /me cannot be read the result says waste unknown, not $0.00', async ({ browser }) => {
+  const page = await guestPage(browser);
+  await startTrap(page);
+  const sleeve = page.getByRole('button', { name: /^scan B-\d+ at S-08$/ });
+  await page.getByRole('button', { name: 'defect: collar' }).click();
+  await expect(sleeve).toBeEnabled({ timeout: 8000 });
+
+  await page.route('**/me', (route) => route.abort());
+  await sleeve.click();
+  await expect(flash(page)).toContainText('RESYNC', { timeout: 5000 });
+  await expect(page.getByTestId('trap-result')).toHaveText(/^stopped at S-08 in \d+\.\d s · waste unknown$/, {
+    timeout: 15_000,
+  });
 });

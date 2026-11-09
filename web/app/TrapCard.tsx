@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Me, MeBundle, Mode } from '../lib/api';
+import { ApiError, Me, MeBundle, Mode } from '../lib/api';
 import { newGateId } from '../lib/gate';
-import { StationCode, money } from '../lib/line';
+import { StationCode, routeIndex, stationFor } from '../lib/line';
+import { money } from '../lib/money';
 import { dropFor, dropLeft, offline, onNetChange } from '../lib/net';
 import { Floor } from './useFloor';
 
@@ -48,10 +49,25 @@ export function TrapCard({ floor }: { floor: Floor }) {
   const runMode = useRef<Mode>(mode);
   const gateId = useRef<string | null>(null);
   const flagging = useRef(false);
+  // Where the clear sent the bundle, and what that op had been paid before
+  // the redo, both as the server said.
+  const redo = useRef<{ op: string; round: number; paidBefore: number | undefined } | null>(null);
 
   const line = (s: Step, text: string) => setLines((l) => ({ ...l, [s]: text }));
   const running = step > 0 && step < 6;
   const cooldown = Math.max(0, startedAt + COOLDOWN_MS - Date.now());
+  const { setTrapRunning } = floor;
+
+  useEffect(() => setTrapRunning(running), [running, setTrapRunning]);
+
+  // The bundle as /me reports it, once /me answers with it; undefined if it
+  // never does, so the card says "unknown" instead of printing a zero.
+  async function serverBundle(code: string, ready: (b: MeBundle) => boolean = () => true, ms = 10_000) {
+    return until(async () => {
+      const b = (await floor.refreshMe())?.bundles.find((x) => x.code === code);
+      return b && ready(b) ? b : undefined;
+    }, ms);
+  }
 
   async function start() {
     setNote(null);
@@ -65,7 +81,12 @@ export function TrapCard({ floor }: { floor: Floor }) {
         try {
           b = pick((await floor.refillBundles()).bundles);
         } catch (e) {
-          setNote((e as Error).message);
+          const blocking = e instanceof ApiError ? e.body.bundle : undefined;
+          setNote(
+            typeof blocking === 'string'
+              ? `no fresh bundle left · sew the collar on ${blocking} at S-07 to get more`
+              : (e as Error).message,
+          );
           return;
         }
       }
@@ -152,21 +173,19 @@ export function TrapCard({ floor }: { floor: Floor }) {
       setStep(3);
       const { verdict, at } = await s.settled;
       if (verdict.result === 'rejected') {
-        const m = await floor.refreshMe();
-        const wasted = m?.bundles.find((b) => b.code === code)?.wastedMills ?? 0;
+        const b = await serverBundle(code);
+        const waste = b ? `${money(b.wastedMills)} wasted` : 'waste unknown';
+        // Stopped means stopped by the rework; any other rejection is its own story.
+        const stopped = verdict.reason === 'rework' || verdict.reason === 'resync';
         const secs = ((at - s.greenAt) / 1000).toFixed(1);
-        line(3, `stopped at S-08 in ${secs} s · ${money(wasted)} wasted`);
-        setStep(4);
+        line(3, stopped ? `stopped at S-08 in ${secs} s · ${waste}` : `S-08 scan rejected (${verdict.reason}) · ${waste}`);
+        setStep(stopped ? 4 : 6);
         return;
       }
       line(3, 'sleeve sewn · the flag is still in Q-01’s queue');
-      const landed = await until(async () => {
-        const m = await floor.refreshMe();
-        const b = m?.bundles.find((x) => x.code === code);
-        return b && b.status !== 'active' ? b : undefined;
-      }, DROP_MS + 45_000, 1000);
+      const landed = await serverBundle(code, (b) => b.status !== 'active', DROP_MS + 45_000);
       if (!landed) {
-        line(3, 'the flag has not landed yet');
+        line(3, 'the flag has not landed yet · waste unknown');
         return;
       }
       line(3, `sleeve sewn on a rework bundle · ${money(landed.wastedMills)} wasted`);
@@ -182,9 +201,12 @@ export function TrapCard({ floor }: { floor: Floor }) {
     try {
       floor.setStation('SUP');
       const r = await floor.gate('SUP', 'clear_rework', code, { targetOp: 'sew_collar' });
-      if (!r.ok) return setNote(r.message);
-      floor.setStation('S-07');
-      line(4, `${code} back at S-07 · round ${r.round}`);
+      if (!r.ok || !r.nextOp) return setNote(r.message);
+      const at = stationFor(r.nextOp);
+      const before = await serverBundle(code, (b) => b.round === r.round);
+      redo.current = { op: r.nextOp, round: r.round, paidBefore: before?.paid[r.nextOp] };
+      if (at) floor.setStation(at);
+      line(4, `${code} back at ${at ?? r.nextOp} · round ${r.round}`);
       setStep(5);
     } finally {
       setBusy(false);
@@ -195,8 +217,23 @@ export function TrapCard({ floor }: { floor: Floor }) {
     if (!code) return;
     setBusy(true);
     try {
-      const s = await floor.batchScan('S-07', code, 'sew_collar');
-      line(5, s.mills === 0 ? `${money(0)} · rework, not paid again` : `collar redone · ${money(s.mills)}`);
+      const r = redo.current;
+      const at = r && stationFor(r.op);
+      if (!r || !at) return setNote('nothing to redo');
+      const s = await floor.batchScan(at, code, r.op);
+      const { verdict } = await s.settled;
+      if (verdict.result !== 'accepted') {
+        line(5, `redo ${verdict.result}${verdict.reason ? ` (${verdict.reason})` : ''}`);
+        return setStep(6);
+      }
+      // What the server posted for the redo: the op's labour now, less what it
+      // had been paid before, read once the redo has been applied.
+      const after = await serverBundle(code, (b) => b.round === r.round && routeIndex(b.nextOp) > routeIndex(r.op));
+      if (!after || r.paidBefore === undefined) line(5, 'redo accepted · pay unknown');
+      else {
+        const paid = (after.paid[r.op] ?? 0) - r.paidBefore;
+        line(5, paid === 0 ? `${money(0)} · rework, not paid again` : `${r.op} redone · ${money(paid)}`);
+      }
       setStep(6);
     } finally {
       setBusy(false);
@@ -265,7 +302,7 @@ export function TrapCard({ floor }: { floor: Floor }) {
             </button>
             {lines[4] && <span className="step-line mono">{lines[4]}</span>}
             <button disabled={step !== 5 || busy} onClick={() => void redoTap()}>
-              redo collar at S-07
+              {redo.current ? `redo ${redo.current.op} at ${stationFor(redo.current.op)}` : 'redo the sent-back step'}
             </button>
             {lines[5] && (
               <span className="step-line mono" data-testid="trap-redo">

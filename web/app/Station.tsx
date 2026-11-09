@@ -1,7 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { DEFECTS, ROUTE, STATION_CODES, STATIONS, StationCode, money, routeIndex } from '../lib/line';
+import { DEFECTS } from '../lib/gate';
+import { ROUTE, STATION_CODES, STATIONS, StationCode, routeIndex } from '../lib/line';
+import { money } from '../lib/money';
 import { dropLeft, offline, setWifi, wifi } from '../lib/net';
 import { Flash } from './Flash';
 import { Floor } from './useFloor';
@@ -41,7 +43,8 @@ export function Station({ floor }: { floor: Floor }) {
       ? 'wifi on'
       : 'wifi off';
 
-  const pieces = floor.work.length * 20;
+  const pieces = floor.work.reduce((s, w) => s + (w.pieces ?? 0), 0);
+  const away = Object.entries(floor.unseenAt);
   const earned = floor.work.reduce((s, w) => s + w.mills, 0);
 
   async function scan(action?: 'qc_fail' | 'scrap') {
@@ -66,20 +69,22 @@ export function Station({ floor }: { floor: Floor }) {
 
   return (
     <div className="station">
-      <div className="top mono">
-        <span data-testid="station">
-          {station} · {info.label}
-        </span>
-        <button
-          className={`sw${wifiLabel === 'wifi on' ? '' : ' sw-off'}`}
-          disabled={scenario}
-          onClick={() => setWifi(!wifi())}
-        >
-          {wifiLabel}
-        </button>
+      {/* Sticky, so STOP and RESYNC stay in sight while the trap card is tapped below. */}
+      <div className={`head${floor.trapRunning ? ' head-compact' : ''}`}>
+        <div className="top mono">
+          <span data-testid="station">
+            {station} · {info.label}
+          </span>
+          <button
+            className={`sw${wifiLabel === 'wifi on' ? '' : ' sw-off'}`}
+            disabled={scenario}
+            onClick={() => setWifi(!wifi())}
+          >
+            {wifiLabel}
+          </button>
+        </div>
+        <Flash flash={floor.flash} />
       </div>
-
-      <Flash flash={floor.flash} />
 
       {asBatch ? (
         <>
@@ -110,6 +115,9 @@ export function Station({ floor }: { floor: Floor }) {
             <Row k="waste avoided" v={`${money(floor.resyncInfo.avoidedMills)} labour and trims`} />
           )}
         </>
+      )}
+      {away.length > 0 && (
+        <Row k="rejected elsewhere" v={away.map(([s, n]) => `${s} ${n}`).join(' · ')} strong />
       )}
       <Row k="my pieces today" v={`${pieces} · ${money(earned)}`} />
 
@@ -156,6 +164,11 @@ export function Station({ floor }: { floor: Floor }) {
         {STATION_CODES.map((s: StationCode) => (
           <button key={s} className={s === station ? 'on' : undefined} onClick={() => floor.setStation(s)}>
             {s}
+            {floor.unseenAt[s] ? (
+              <span className="badge" aria-label={`${floor.unseenAt[s]} rejected`}>
+                {floor.unseenAt[s]}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>

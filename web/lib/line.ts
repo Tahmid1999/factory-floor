@@ -1,7 +1,5 @@
-// The station's copy of the line. The server decides every step and every
-// posting; the phone needs the route to know which bundle is next here, and
-// the rates to keep the operator's own tally, the way a piece-rate worker
-// keeps one in a notebook.
+// The station's copy of the line: the route, to know which bundle is next
+// here, and which station does which op. Rates and trims come from /me.
 
 export const ROUTE = ['cut', 'sew_collar', 'sew_sleeve', 'side_seam', 'hem', 'qc_final', 'pack', 'ship'];
 
@@ -19,27 +17,8 @@ export const STATIONS: Record<StationCode, { op: string; label: string; sewing: 
 
 export const STATION_CODES = Object.keys(STATIONS) as StationCode[];
 
-export const DEFECTS = ['collar', 'sleeve', 'seam', 'hem', 'stain'] as const;
-export type Defect = (typeof DEFECTS)[number];
-
-export const PIECES = 20;
-const RATE_MILLS: Record<string, number> = { sew_collar: 15, sew_sleeve: 12, side_seam: 11, hem: 8 };
-const TRIMS_MILLS: Record<string, number> = { sew_sleeve: 290 };
-
-export function labourMills(op: string): number {
-  return (RATE_MILLS[op] ?? 0) * PIECES;
-}
-
-// What a step costs if it turns out to be sewn on a bad bundle: the wage and
-// the trims it used up. Same sum as the server's waste.
-export function stepCostMills(op: string): number {
-  return labourMills(op) + (TRIMS_MILLS[op] ?? 0);
-}
-
-// Integer mills to dollars without floats: 530 -> $0.53.
-export function money(mills: number): string {
-  const cents = Math.round(mills / 10);
-  return `$${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, '0')}`;
-}
-
 export const routeIndex = (op: string | null) => (op === null ? -1 : ROUTE.indexOf(op));
+
+export function stationFor(op: string | null): StationCode | undefined {
+  return STATION_CODES.find((s) => STATIONS[s].op === op);
+}
