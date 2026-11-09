@@ -43,6 +43,20 @@ describe('guests', () => {
     expect(new Set(codes).size).toBe(3);
   });
 
+  it('marks the guest cookie Secure only in production', async () => {
+    const before = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      const prod = await http().get('/me').set('x-forwarded-for', freshIp()).expect(200);
+      expect(prod.headers['set-cookie'][0]).toMatch(/ff_guest=.*; Secure/i);
+      process.env.NODE_ENV = 'test';
+      const dev = await http().get('/me').set('x-forwarded-for', freshIp()).expect(200);
+      expect(dev.headers['set-cookie'][0]).not.toMatch(/secure/i);
+    } finally {
+      process.env.NODE_ENV = before;
+    }
+  });
+
   it('numbers bundle codes from B-8492 and writes the cut event and labour posting', async () => {
     await resetDb();
     const res = await http().get('/me').set('x-forwarded-for', freshIp()).expect(200);

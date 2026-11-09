@@ -31,7 +31,14 @@ export class GuestGuard implements CanActivate {
       guest = await this.guests.touch(guest.id);
     } else {
       guest = await this.guests.createGuest(req.ip ?? '');
-      res.cookie(GUEST_COOKIE, guest.id, { signed: true, httpOnly: true, sameSite: 'lax', maxAge: DAY_MS });
+      res.cookie(GUEST_COOKIE, guest.id, {
+        signed: true,
+        httpOnly: true,
+        sameSite: 'lax',
+        // The page and the API are on different hosts, so production is always https.
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: DAY_MS,
+      });
     }
     req.guest = guest;
     req.actor = { guestId: guest.id, sim: false };
