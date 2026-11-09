@@ -1,5 +1,5 @@
 import { BadRequestException, Controller, Get, Inject, NotFoundException, Query, Req } from '@nestjs/common';
-import { BundleStatus } from '@prisma/client';
+import { BundleStatus, Prisma } from '@prisma/client';
 import type { Request } from 'express';
 import { CLOCK, Clock } from '../clock';
 import { isSimCaller } from '../guests/sim-caller';
@@ -9,11 +9,11 @@ import { canFlag } from '../line/state-machine';
 import { PrismaService } from '../prisma.service';
 
 const MAX_WORK = 10;
-// Candidates are read before mayScan filters them, so read more than we return.
-const CANDIDATES = 100;
-const QUIET_MS = 5 * 60 * 1000;
+// mayScan filters after the read, so a page of a visitor's bundles that the
+// sim must leave alone could otherwise hide the sim's own work behind it.
+const PAGE = 100;
+const MAX_PAGES = 5;
 const COLLAR = POLO_ROUTE.indexOf('sew_collar');
-const SLEEVE = POLO_ROUTE.indexOf('sew_sleeve');
 
 export type SimWork = { code: string; nextOp: string | null; flaggedAt?: number };
 
@@ -47,23 +47,23 @@ export class SimWorkController {
   }
 
   // Oldest first, and only what the sim may scan. The query narrows to the
-  // rows mayScan could say yes to; mayScan stays the one rule.
-  private async candidates(where: { status: BundleStatus | { in: BundleStatus[] }; nextStep?: number | { gt?: number; lte?: number } }) {
+  // station; who may scan is mayScan's call alone, so the rule is never
+  // written twice.
+  private async candidates(where: Prisma.BundleWhereInput) {
     const now = this.clock.now();
-    const rows = await this.prisma.bundle.findMany({
-      where: {
-        ...where,
-        OR: [
-          { isSimulated: true },
-          { nextStep: { gt: SLEEVE } },
-          { guest: { lastActiveAt: { lte: new Date(now.getTime() - QUIET_MS) } } },
-        ],
-      },
-      include: { guest: { select: { lastActiveAt: true } } },
-      orderBy: [{ createdAt: 'asc' }, { code: 'asc' }],
-      take: CANDIDATES,
-    });
-    return rows.filter((b) => mayScan({ sim: true }, { ...b, guestLastActiveAt: b.guest?.lastActiveAt ?? null }, now));
+    const out: Prisma.BundleGetPayload<{ include: { guest: { select: { lastActiveAt: true } } } }>[] = [];
+    for (let page = 0; page < MAX_PAGES && out.length < MAX_WORK; page++) {
+      const rows = await this.prisma.bundle.findMany({
+        where,
+        include: { guest: { select: { lastActiveAt: true } } },
+        orderBy: [{ createdAt: 'asc' }, { code: 'asc' }],
+        skip: page * PAGE,
+        take: PAGE,
+      });
+      out.push(...rows.filter((b) => mayScan({ sim: true }, { ...b, guestLastActiveAt: b.guest?.lastActiveAt ?? null }, now)));
+      if (rows.length < PAGE) break;
+    }
+    return out;
   }
 
   private waiting(status: BundleStatus | BundleStatus[], nextStep: number) {

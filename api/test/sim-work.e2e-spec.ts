@@ -1,7 +1,9 @@
 import { INestApplication } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { FixedClock } from '../src/clock';
+import { POLO_ROUTE } from '../src/line/line';
 import { bootApi, makeGuest, purgeQueues, resetDb } from './helpers';
 
 describe('GET /sim/work', () => {
@@ -10,13 +12,19 @@ describe('GET /sim/work', () => {
   const key = () => ({ 'x-sim-key': process.env.SIM_KEY! });
   const work = (station: string) => request(api.getHttpServer()).get('/sim/work').query({ station }).set(key());
 
+  let prisma: PrismaClient;
+  const codesAt = async (station: string) =>
+    (await work(station).expect(200)).body.bundles.map((b: { code: string }) => b.code);
+
   beforeAll(async () => {
     await resetDb();
     await purgeQueues();
     api = await bootApi(clock);
+    prisma = new PrismaClient();
   });
 
   afterAll(async () => {
+    await prisma.$disconnect();
     await api.close();
   });
 
@@ -61,5 +69,36 @@ describe('GET /sim/work', () => {
     expect(await listed()).not.toContain(guest.codes[0]);
     clock.advance(5 * 60_000);
     expect(await listed()).toEqual(expect.arrayContaining(guest.codes));
+  });
+
+  // The trap: the visitor's sleeve has landed and the flag is still queued,
+  // or the flag has landed and the visitor is about to clear it. The sim must
+  // not sew on, flag, or clear either while the visitor is here.
+  it("keeps an active visitor's bundles off every station but pack and ship", async () => {
+    const guest = await makeGuest(api, clock, ['S-07']);
+    const [sewn, flagged, done] = guest.codes;
+    const step = (op: string) => POLO_ROUTE.indexOf(op);
+    await prisma.bundle.update({ where: { code: sewn }, data: { nextStep: step('side_seam') } });
+    await prisma.bundle.update({ where: { code: flagged }, data: { status: 'rework', nextStep: step('side_seam') } });
+    await prisma.bundle.update({ where: { code: done }, data: { nextStep: step('pack') } });
+    const b = await prisma.bundle.findUniqueOrThrow({ where: { code: flagged } });
+    await prisma.bundleEvent.create({
+      data: { bundleId: b.id, op: 'qc_flag', source: 'gate', round: 0, correctedAt: clock.now(), createdAt: clock.now() },
+    });
+    // makeGuest already moved a minute on from the guest's last call.
+    clock.advance(3 * 60_000);
+
+    for (const station of ['S-09', 'Q-01', 'SUP']) {
+      const listed = await codesAt(station);
+      expect(listed).not.toContain(sewn);
+      expect(listed).not.toContain(flagged);
+    }
+    expect(await codesAt('P-01')).toContain(done);
+
+    // Quiet for 5 minutes: the sim carries all of them.
+    clock.advance(60_000);
+    expect(await codesAt('S-09')).toContain(sewn);
+    expect(await codesAt('Q-01')).toContain(sewn);
+    expect(await codesAt('SUP')).toContain(flagged);
   });
 });
