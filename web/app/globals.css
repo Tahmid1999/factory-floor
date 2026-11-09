@@ -380,3 +380,17 @@ select {
   font-size: 12px;
   color: var(--stop);
 }
+
+.hood {
+  display: block;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hood-t,
+.hood-p {
+  color: #777;
+}
