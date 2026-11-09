@@ -48,7 +48,16 @@ export class ApplyService {
         const [bundle] = await tx.$queryRaw<Bundle[]>`
           SELECT * FROM "Bundle" WHERE "code" = ${first.bundleCode} FOR UPDATE`;
         lockMs = performance.now() - askedAt;
-        if (!bundle) return 'skipped';
+        // The bundle went with a purge or a reset after the scan came in. The
+        // row is settled so the sweep stops sending it round again.
+        if (!bundle) {
+          const result = 'rejected(gone)';
+          await tx.scanInbox.update({ where: { id: inboxId }, data: { result } });
+          await tx.deviceNotice.create({
+            data: { deviceId: first.deviceId, seq: first.seq, bundleCode: first.bundleCode, result, createdAt: this.clock.now() },
+          });
+          return 'rejected';
+        }
 
         // Read again under the lock: a second delivery of this id that was
         // waiting on the lock must see the result the first one committed.
