@@ -11,7 +11,9 @@ async function main() {
   const origins = (process.env.WEB_ORIGIN ?? '').split(',').map((o) => o.trim()).filter(Boolean);
   if (origins.length > 0) app.enableCors({ origin: origins, credentials: true });
   app.enableShutdownHooks();
-  await app.listen(Number(process.env.PORT ?? 4120), '127.0.0.1');
+  // Loopback by default; a container sets HOST=0.0.0.0 so its published port
+  // reaches it, and the compose file publishes that port on 127.0.0.1 only.
+  await app.listen(Number(process.env.PORT ?? 4120), process.env.HOST ?? '127.0.0.1');
 }
 
 main();
