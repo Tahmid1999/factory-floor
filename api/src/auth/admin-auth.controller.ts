@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import type { CookieOptions, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { CLOCK, Clock } from '../clock';
-import { hit, isLimited } from '../limits';
+import { hit, refund } from '../limits';
 import { PrismaService } from '../prisma.service';
 import { ADMIN_COOKIE, adminSecret } from './roles.guard';
 
@@ -39,20 +39,20 @@ export class AdminAuthController {
       throw new HttpException({ error: 'login and password required' }, 400);
     }
 
-    // Only failures count, and a locked-out ip is refused before the password
-    // is checked; otherwise the right guess would still get through after the cap.
+    // The slot is taken before the first await: with the db read and bcrypt in
+    // between, a burst of parallel guesses would all pass a check-then-count
+    // and the cap would not bound it. A success hands the slot back so only
+    // failures count, and an ip already at the cap is refused even with the
+    // right password.
     const key = `admin-login:${req.ip ?? ''}`;
-    const now = this.clock.now().getTime();
-    if (isLimited(key, TRIES_PER_HOUR, HOUR_MS / 1000, now)) {
+    if (!hit(key, TRIES_PER_HOUR, HOUR_MS / 1000, this.clock.now().getTime())) {
       throw new HttpException({ error: 'too many tries, wait an hour' }, 429);
     }
 
     const user = await this.prisma.user.findUnique({ where: { login } });
     const ok = await bcrypt.compare(password, user?.passwordHash ?? DECOY_HASH);
-    if (!user || !ok) {
-      hit(key, TRIES_PER_HOUR, HOUR_MS / 1000, now);
-      throw new HttpException({ error: 'wrong login or password' }, 401);
-    }
+    if (!user || !ok) throw new HttpException({ error: 'wrong login or password' }, 401);
+    refund(key);
 
     const token = jwt.sign({ role: user.role }, adminSecret(), {
       algorithm: 'HS256',

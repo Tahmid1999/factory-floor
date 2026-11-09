@@ -65,6 +65,11 @@ describe('roles, admin login and audit', () => {
       update: { passwordHash: bcrypt.hashSync('right-password', 4), role: 'admin' },
       create: { login: 'tahmid', passwordHash: bcrypt.hashSync('right-password', 4), role: 'admin' },
     });
+    await prisma.user.upsert({
+      where: { login: 'quinn' },
+      update: { passwordHash: bcrypt.hashSync('qc-password', 4), role: 'qc' },
+      create: { login: 'quinn', passwordHash: bcrypt.hashSync('qc-password', 4), role: 'qc' },
+    });
     app = await bootApi({ clock, extraControllers: [TestController] });
   });
 
@@ -146,6 +151,29 @@ describe('roles, admin login and audit', () => {
     for (let i = 0; i < 5; i++) await wrong().expect(401);
     const res = await wrong().expect(429);
     expect(res.body).toEqual({ error: 'too many tries, wait an hour' });
+  });
+
+  it('bounds a burst of parallel wrong passwords to the cap', async () => {
+    const ip = freshIp();
+    const statuses = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        http().post('/admin/login').set('x-forwarded-for', ip).send({ login: 'tahmid', password: 'nope' }).then((r) => r.status),
+      ),
+    );
+    expect(statuses.filter((s) => s === 401).length).toBeLessThanOrEqual(5);
+    expect(statuses.filter((s) => s === 429).length).toBeGreaterThanOrEqual(15);
+  });
+
+  it('refuses a write from a logged-in non-admin, even with ?as=admin', async () => {
+    const login = await http()
+      .post('/admin/login')
+      .set('x-forwarded-for', freshIp())
+      .send({ login: 'quinn', password: 'qc-password' })
+      .expect(200);
+    const cookie = login.headers['set-cookie'][0].split(';')[0];
+    const res = await http().post('/t/write').set('Cookie', cookie).expect(403);
+    expect(res.body).toEqual({ error: 'qc cannot write' });
+    await http().post('/t/write?as=admin').set('Cookie', cookie).expect(403);
   });
 
   it('does not count successful logins against the limit', async () => {

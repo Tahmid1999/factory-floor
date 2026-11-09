@@ -13,9 +13,10 @@ export function hit(key: string, max: number, windowSec: number, now: number): b
   return true;
 }
 
-// Read-only twin of hit(), for limits that count failures only: the caller
-// asks first and calls hit() when the try failed.
-export function isLimited(key: string, max: number, windowSec: number, now: number): boolean {
+// Gives back a slot taken by hit(), for limits that count failures only: the
+// caller takes the slot before any await so parallel tries cannot all pass the
+// check, then refunds it when the try turns out to be fine.
+export function refund(key: string): void {
   const w = windows.get(key);
-  return !!w && now - w.start < windowSec * 1000 && w.count >= max;
+  if (w && w.count > 0) w.count -= 1;
 }

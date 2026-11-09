@@ -34,9 +34,10 @@ function readAdminCookie(req: Request): { login: string; role: Role } | null {
 }
 
 // Routes name the view they serve and the guard compares it with the acting
-// role, so a controller never checks roles by hand. The same pattern runs in
-// his NestJS back ends' role guards. Routes with neither decorator pass
-// untouched, which is why this can sit on every route as a global guard.
+// role, so a controller never checks roles by hand. The check is on the
+// server for every route: hiding a menu in the admin UI is never the
+// protection. Routes with neither decorator pass untouched, which is why this
+// can sit on every route as a global guard.
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
