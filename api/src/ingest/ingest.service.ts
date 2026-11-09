@@ -122,11 +122,13 @@ export class IngestService {
         }
 
         // No lock: a bundle that goes to rework a moment later is caught by the
-        // worker, which checks again under its own lock.
+        // worker, which checks again under its own lock. A scrapped bundle is
+        // named as such: it will not come back to the station after a clear.
         if (bundle.status === 'rework' || bundle.status === 'scrapped') {
-          await tx.scanInbox.update({ where: { id }, data: { result: 'rejected(rework)' } });
+          const reason = bundle.status === 'scrapped' ? 'scrapped' : 'rework';
+          await tx.scanInbox.update({ where: { id }, data: { result: `rejected(${reason})` } });
           resync.set(bundle.code, resyncOf(bundle));
-          results.push({ seq: e.seq, result: 'rejected', reason: 'rework' });
+          results.push({ seq: e.seq, result: 'rejected', reason });
         } else {
           acceptedIds.push(id);
           results.push({ seq: e.seq, result: 'accepted' });

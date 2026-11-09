@@ -193,6 +193,15 @@ describe('batch ingest', () => {
     expect(await prisma.scanInbox.count({ where: { deviceId: q.deviceId } })).toBe(0);
   });
 
+  it('names a scrapped bundle as scrapped, not rework', async () => {
+    const s = await station();
+    await prisma.bundle.update({ where: { code: s.codes[0] }, data: { status: 'scrapped' } });
+    const res = await s.send({ deviceId: s.deviceId, deviceNow: now(), events: [ev(1, s.codes[0])] }).expect(201);
+    expect(res.body.results).toEqual([{ seq: 1, result: 'rejected', reason: 'scrapped' }]);
+    expect(res.body.resync).toEqual([{ bundleCode: s.codes[0], status: 'scrapped', nextOp: null, round: 0 }]);
+    expect((await prisma.scanInbox.findFirstOrThrow({ where: { deviceId: s.deviceId } })).result).toBe('rejected(scrapped)');
+  });
+
   it('repeats a notice with the same id for 60 s after delivery, then stops', async () => {
     const s = await station();
     await prisma.deviceNotice.create({

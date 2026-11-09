@@ -203,7 +203,14 @@ export function useFloor() {
           code: codeOf.get(v.seq)?.bundleCode ?? '?',
           reason: v.reason,
         })),
-        ...r.flushed.map((e) => ({ seq: e.seq, op: e.op, code: e.bundleCode, reason: 'rework' })),
+        // Flushed for the resync of a bundle that went to rework or was
+        // scrapped; a scrapped bundle is not coming back, so it says so.
+        ...r.flushed.map((e) => ({
+          seq: e.seq,
+          op: e.op,
+          code: e.bundleCode,
+          reason: r.reply.resync.find((x) => x.bundleCode === e.bundleCode)?.status === 'scrapped' ? 'scrapped' : 'rework',
+        })),
         ...lateRejected.map((n) => ({ seq: n.seq, op: '', code: n.bundleCode, reason: n.result.slice(9, -1) })),
       ];
       if (bad.length === 0) return;
@@ -219,7 +226,12 @@ export function useFloor() {
       }
       const codes = [...new Set(bad.map((b) => b.code))];
       const reasons = new Set(bad.map((b) => b.reason));
-      const why = reasons.size === 1 && reasons.has('rework') ? 'went to rework' : [...reasons].join(', ');
+      const why =
+        reasons.size === 1 && reasons.has('rework')
+          ? 'went to rework'
+          : reasons.size === 1 && reasons.has('scrapped')
+            ? 'was scrapped'
+            : [...reasons].join(', ');
       setFlash({
         tone: 'resync',
         title: 'RESYNC',
@@ -230,8 +242,9 @@ export function useFloor() {
         station: r.station,
         dropped: bad.length,
         codes,
+        // A scan stopped on a scrapped bundle is work not done on it either.
         avoidedMills: bad
-          .filter((b) => b.reason === 'rework')
+          .filter((b) => b.reason === 'rework' || b.reason === 'scrapped')
           .reduce((s, b) => s + costOf(meRef.current, b.code, b.op), 0),
       });
     },
