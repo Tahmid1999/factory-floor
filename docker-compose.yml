@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      FF_OWNER_PASSWORD: ${FF_OWNER_PASSWORD}
+      FF_APP_PASSWORD: ${FF_APP_PASSWORD}
+    ports:
+      - "127.0.0.1:5440:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/pg-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+      - ./deploy/pg-passwords.sh:/docker-entrypoint-initdb.d/20-passwords.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD}
+    ports:
+      - "127.0.0.1:5680:5672"
+      - "127.0.0.1:15680:15672"
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+
+volumes:
+  pgdata:
+  rabbitdata:

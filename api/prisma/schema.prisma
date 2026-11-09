@@ -1,0 +1,184 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GuestMode {
+  hybrid
+  async
+}
+
+enum BundleStatus {
+  active
+  rework
+  scrapped
+  packed
+  shipped
+}
+
+enum EventSource {
+  batch
+  gate
+}
+
+enum PostingKind {
+  labour
+  fabric
+  writeoff
+  revenue
+  adjustment
+}
+
+model Style {
+  id              String  @id @default(cuid())
+  code            String  @unique
+  name            String
+  piecesPerBundle Int
+  route           String[]
+  bundles         Bundle[]
+  rates           PieceRate[]
+}
+
+model Operation {
+  code      String  @id
+  isGate    Boolean
+  trimsMills Int
+}
+
+model PieceRate {
+  id                String   @id @default(cuid())
+  styleId           String
+  op                String
+  ratePerPieceMills Int
+  effectiveFrom     DateTime
+  style             Style    @relation(fields: [styleId], references: [id])
+
+  @@index([styleId, op, effectiveFrom])
+}
+
+model Guest {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  ipHash       String
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime
+  refillsToday Int       @default(0)
+  mode         GuestMode @default(hybrid)
+  devices      Device[]
+  bundles      Bundle[]
+}
+
+model Device {
+  id            String    @id @default(cuid())
+  code          String
+  guestId       String?
+  isSimulated   Boolean   @default(false)
+  registeredAt  DateTime  @default(now())
+  lastSyncAt    DateTime?
+  lastPending   Int       @default(0)
+  clockOffsetMs Int       @default(0)
+  guest         Guest?    @relation(fields: [guestId], references: [id])
+
+  @@unique([guestId, code])
+}
+
+model Bundle {
+  id          String       @id @default(cuid())
+  code        String       @unique
+  styleId     String
+  pieces      Int
+  status      BundleStatus
+  nextStep    Int          @default(0)
+  reworkRound Int          @default(0)
+  guestId     String?
+  isSimulated Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  style       Style        @relation(fields: [styleId], references: [id])
+  guest       Guest?       @relation(fields: [guestId], references: [id])
+}
+
+model ScanInbox {
+  id          String    @id @default(cuid())
+  deviceId    String
+  seq         Int
+  bundleCode  String
+  op          String
+  scannedAt   DateTime
+  offsetMs    Int
+  correctedAt DateTime
+  receivedAt  DateTime  @default(now())
+  result      String?
+  appliedAt   DateTime?
+
+  @@unique([deviceId, seq])
+  @@index([result, receivedAt])
+}
+
+model HeldEvent {
+  id      String   @id @default(cuid())
+  inboxId String   @unique
+  bundleId String
+  heldAt  DateTime @default(now())
+}
+
+model BundleEvent {
+  id          String      @id @default(cuid())
+  bundleId    String
+  op          String
+  source      EventSource
+  deviceId    String?
+  inboxId     String?     @unique
+  gateId      String?     @unique
+  round       Int
+  correctedAt DateTime
+  wasted      Boolean     @default(false)
+  isSimulated Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+}
+
+model Posting {
+  id           String      @id @default(cuid())
+  period       String
+  kind         PostingKind
+  amountMills  Int
+  bundleCode   String
+  eventId      String?
+  guestId      String?
+  guestPurged  Boolean     @default(false)
+  adjustsPeriod String?
+  isSimulated  Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+}
+
+model DeviceNotice {
+  id          String    @id @default(cuid())
+  deviceId    String
+  seq         Int
+  bundleCode  String
+  result      String
+  createdAt   DateTime  @default(now())
+  deliveredAt DateTime?
+}
+
+model AuditLog {
+  id     String   @id @default(cuid())
+  actor  String
+  role   String
+  action String
+  entity String
+  before Json?
+  after  Json?
+  at     DateTime @default(now())
+}
+
+model User {
+  id           String @id @default(cuid())
+  login        String @unique
+  passwordHash String
+  role         String
+}
