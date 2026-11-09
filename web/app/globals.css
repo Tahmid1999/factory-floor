@@ -1,0 +1,350 @@
+:root {
+  --ink: #111;
+  --muted: #555;
+  --rule: #ccc;
+  --rule-light: #eee;
+  --ok: #1f7a3a;
+  --stop: #b3261e;
+  --amber: #c77700;
+  --idle: #f1f1ef;
+  --mono: ui-monospace, 'Cascadia Mono', Consolas, Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: #fff;
+  color: var(--ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+button,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.wrap {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  padding: 12px 16px 32px;
+}
+
+.phone {
+  width: 100%;
+  min-width: 0;
+  max-width: 430px;
+}
+
+.about {
+  display: none;
+  width: 240px;
+  padding-top: 40px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.about p {
+  margin: 0 0 10px;
+}
+
+@media (min-width: 820px) {
+  .about {
+    display: block;
+  }
+}
+
+/* On a phone the note sits under the trap instead, short as it is. */
+@media (max-width: 819px) {
+  .wrap {
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  .about {
+    display: block;
+    width: 100%;
+    max-width: 430px;
+    padding-top: 14px;
+    font-size: 12px;
+  }
+}
+
+.who {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 8px;
+}
+
+.sw {
+  border: 1px solid var(--ink);
+  background: #fff;
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sw-off {
+  background: var(--ink);
+  color: #fff;
+}
+
+.sw:disabled {
+  cursor: default;
+  border-style: dashed;
+}
+
+.flash {
+  margin: 10px 0;
+  min-height: 116px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 4px;
+  color: #fff;
+}
+
+.flash-title {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.flash-detail {
+  font-size: 13px;
+}
+
+.flash-sub {
+  font-size: 12px;
+}
+
+.flash-ok {
+  background: var(--ok);
+}
+
+.flash-stop {
+  background: var(--stop);
+}
+
+/* Dark text on amber: white on this amber is too faint in daylight. */
+.flash-resync {
+  background: var(--amber);
+  color: #111;
+}
+
+.flash-idle,
+.flash-wait {
+  background: var(--idle);
+  color: var(--muted);
+}
+
+.flash-idle .flash-title,
+.flash-wait .flash-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule-light);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.row span:last-child {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.strong {
+  font-weight: 700;
+}
+
+.pick {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12px;
+}
+
+.pick select {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px;
+  border: 1px solid var(--ink);
+  background: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  color: #999;
+  border-color: #bbb;
+  cursor: default;
+}
+
+.btn-quiet {
+  margin-top: 6px;
+  padding: 7px;
+  font-weight: 400;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.picker,
+.modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.picker button,
+.modes button {
+  flex: 1 0 auto;
+  border: 1px solid var(--rule);
+  background: #fff;
+  padding: 6px 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.picker button.on,
+.modes button.on {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.modes button:disabled:not(.on) {
+  color: #999;
+  cursor: default;
+}
+
+.log {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--rule);
+  font-size: 11px;
+  color: #333;
+}
+
+.log li {
+  padding: 1px 0;
+  overflow-wrap: anywhere;
+}
+
+.trap {
+  margin-top: 18px;
+  border-top: 2px solid var(--ink);
+}
+
+.card {
+  margin-top: 8px;
+  border: 1px solid var(--rule);
+  padding: 10px;
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.card-head .mono {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.card ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.card li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--rule-light);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.card li.now {
+  color: var(--ink);
+}
+
+.card li > span:first-child {
+  display: block;
+}
+
+.card li button {
+  margin: 6px 6px 0 0;
+  border: 1px solid var(--ink);
+  background: #fff;
+  padding: 5px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.card li button:disabled {
+  border-color: #ccc;
+  color: #aaa;
+  cursor: default;
+}
+
+.step-line {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.note-line {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--stop);
+}
