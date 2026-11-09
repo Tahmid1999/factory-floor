@@ -105,18 +105,40 @@ describe('admin reads and writes', () => {
     const t = await get(`/admin/bundles/${code}`).expect(200);
     expect(t.body.code).toBe(code);
     const byOp = (op: string) => t.body.events.filter((e: { op: string }) => e.op === op);
-    expect(byOp('cut')[0]).toMatchObject({ source: 'gate', device: 'dev-C01', deviceKind: 'sim', result: 'applied' });
+    expect(byOp('cut')[0]).toMatchObject({
+      source: 'gate',
+      device: 'dev-C01',
+      deviceKind: 'sim',
+      result: 'applied',
+      label: 'cut by sim-cutter',
+    });
     expect(byOp('sew_collar')[0]).toMatchObject({
       source: 'batch',
       device: 'dev-S07',
       deviceKind: 'guest',
       result: 'applied',
       postedMills: 300,
+      label: null,
     });
     expect(byOp('sew_collar')[0].scannedAt).toBeLessThan(byOp('sew_collar')[0].receivedAt);
     expect(byOp('qc_flag')[0]).toMatchObject({ source: 'gate', device: 'dev-Q01', result: 'applied' });
     expect(byOp('sew_sleeve')[0]).toMatchObject({ source: 'batch', result: 'rejected(rework)', wasted: false });
     expect(JSON.stringify(t.body)).not.toContain(g.devices['S-07']);
+  });
+
+  it("marks the sim's work on a visitor's bundle as sim-carried", async () => {
+    const g = await makeGuest(api, clock, ['S-07']);
+    const code = g.codes[1];
+    const sim = (path: string) => http().post(path).set('x-sim-key', process.env.SIM_KEY!);
+    const dev = await sim('/devices').send({ station: 'S-07', simName: 'sim-op-label' }).expect(201);
+    clock.advance(5 * 60_000);
+    const ev = { seq: 1, bundleCode: code, op: 'sew_collar', scannedAt: clock.now().getTime(), offsetMs: 0 };
+    await sim('/scans/batch').send({ deviceId: dev.body.deviceId, deviceNow: clock.now().getTime(), events: [ev] }).expect(201);
+    await until(applied(code));
+
+    const t = await get(`/admin/bundles/${code}`).expect(200);
+    const collar = t.body.events.find((e: { op: string }) => e.op === 'sew_collar');
+    expect(collar).toMatchObject({ deviceKind: 'sim', label: 'sim-carried' });
   });
 
   it('answers 404 for a bundle code that does not exist', async () => {

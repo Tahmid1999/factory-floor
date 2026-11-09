@@ -114,9 +114,17 @@ export class AdminService {
     const heldNow = new Set(held.map((h) => h.inboxId));
     const eventOfInbox = new Map(events.filter((e) => e.inboxId).map((e) => [e.inboxId, e]));
 
-    const who = (deviceId: string | null) => {
+    // A visitor's bundle is cut by the sim before the visitor sees it, and
+    // carried on by the sim after; the label says whose work a row was.
+    const carried = (d: { isSimulated: boolean; simName: string | null }, op: string) => {
+      if (!b.guestId || !d.isSimulated) return null;
+      return op === 'cut' ? `cut by ${d.simName ?? 'sim'}` : 'sim-carried';
+    };
+    const who = (deviceId: string | null, op: string) => {
       const d = deviceId ? devices.get(deviceId) : undefined;
-      return d ? { device: deviceLabel(d), deviceKind: deviceKind(d) } : { device: null, deviceKind: null };
+      return d
+        ? { device: deviceLabel(d), deviceKind: deviceKind(d), label: carried(d, op) }
+        : { device: null, deviceKind: null, label: null };
     };
     const outcome = (e: (typeof events)[number] | undefined) => ({
       wasted: e?.wasted ?? false,
@@ -128,7 +136,7 @@ export class AdminService {
       source: 'batch' as const,
       op: r.op,
       seq: r.seq as number | null,
-      ...who(r.deviceId),
+      ...who(r.deviceId, r.op),
       scannedAt: r.scannedAt.getTime() as number | null,
       correctedAt: r.correctedAt.getTime(),
       receivedAt: r.receivedAt.getTime(),
@@ -147,7 +155,7 @@ export class AdminService {
         source: e.source,
         op: e.op,
         seq: null as number | null,
-        ...who(e.deviceId),
+        ...who(e.deviceId, e.op),
         scannedAt: null as number | null,
         correctedAt: e.correctedAt.getTime(),
         receivedAt: e.createdAt.getTime(),

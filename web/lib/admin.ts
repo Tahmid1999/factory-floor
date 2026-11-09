@@ -40,6 +40,8 @@ export type TimelineRow = {
   seq: number | null;
   device: string | null;
   deviceKind: 'sim' | 'guest' | null;
+  // Set on a visitor's bundle for the sim's rows: "cut by sim-cutter" or "sim-carried".
+  label: string | null;
   scannedAt: number | null;
   correctedAt: number;
   receivedAt: number;

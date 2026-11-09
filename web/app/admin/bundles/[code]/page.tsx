@@ -56,6 +56,7 @@ export default function BundlePage() {
                     <span className="mono">
                       {r.device}
                       {r.deviceKind === 'sim' && <span className="adm-mute"> sim</span>}
+                      {r.label && <span className="adm-mute"> · {r.label}</span>}
                     </span>
                   ) : (
                     '-'
