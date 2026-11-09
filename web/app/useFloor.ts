@@ -6,11 +6,13 @@ import { GateBody, GateReply, gateScan, newGateId } from '../lib/gate';
 import { STATION_CODES, STATIONS, StationCode, routeIndex, ROUTE } from '../lib/line';
 import { offline, onNetChange } from '../lib/net';
 import {
+  QueuedEvent,
   Unseen,
   WorkRow,
   addUnseen,
   addWork,
   allUnseen,
+  drop,
   dropWork,
   enqueue,
   floorSeq,
@@ -31,6 +33,9 @@ export type BatchScan = { deviceId: string; seq: number; greenAt: number; mills:
 export type ResyncInfo = { station: string; dropped: number; codes: string[]; avoidedMills: number };
 
 const ME_KEY = 'ff-me';
+// By guest id, never name: a name is drawn again for a later visitor, who
+// would otherwise pick up an expired guest's device and get 403 for it.
+const deviceKey = (guestId: string, st: StationCode) => `device:${guestId}:${st}`;
 const SEEN_KEY = 'notices-seen';
 const SEWING_OPS = new Set(['sew_collar', 'sew_sleeve', 'side_seam', 'hem']);
 
@@ -50,6 +55,17 @@ function labourOf(me: Me | null, code: string, op: string): number {
 
 function costOf(me: Me | null, code: string, op: string): number {
   return labourOf(me, code, op) + (me?.trims?.[op] ?? 0);
+}
+
+// Out of the queue, the tally and the unseen list, device by device.
+async function dropEarlierVisit(events: QueuedEvent[]): Promise<void> {
+  const byDevice = new Map<string, number[]>();
+  for (const e of events) byDevice.set(e.deviceId, [...(byDevice.get(e.deviceId) ?? []), e.seq]);
+  for (const [deviceId, seqs] of byDevice) {
+    await drop(deviceId, seqs);
+    await dropWork(deviceId, seqs);
+    await takeUnseen(deviceId);
+  }
 }
 
 function readCachedMe(): Me | null {
@@ -229,9 +245,9 @@ export function useFloor() {
     async (st: StationCode): Promise<string> => {
       const known = devicesRef.current[st];
       if (known) return known;
-      const name = meRef.current?.name;
-      if (!name) throw new Error('no guest yet');
-      const key = `device:${name}:${st}`;
+      const guestId = meRef.current?.guestId;
+      if (!guestId) throw new Error('no guest yet');
+      const key = deviceKey(guestId, st);
       let id = await getMeta<string>(key);
       // Registering is idempotent and answers with the last seq the server
       // holds, so a counter lost with the browser's storage starts above it.
@@ -275,19 +291,34 @@ export function useFloor() {
       }
       setMe(m);
       seen.current = new Set((await getMeta<string[]>(SEEN_KEY)) ?? []);
-      const fromQueue: Local = {};
-      for (const e of await pendingAll()) {
-        if (SEWING_OPS.has(e.op)) (fromQueue[e.bundleCode] ??= []).push(e.op);
-      }
-      setLocal(fromQueue);
-      for (const st of STATION_CODES) {
-        const id = await getMeta<string>(`device:${m.name}:${st}`);
+      const mine = new Set<string>();
+      // A /me cached before guest ids were sent cannot say whose a device is,
+      // so nothing is judged an earlier visit's on it.
+      for (const st of m.guestId ? STATION_CODES : []) {
+        const id = await getMeta<string>(deviceKey(m.guestId, st));
         if (!id) continue;
+        mine.add(id);
         // The queue drains either way; scanning waits for a known seq.
         startSync(id, st, handlers);
         if (await hasSeq(id)) devicesRef.current = { ...devicesRef.current, [st]: id };
       }
       setDevices(devicesRef.current);
+      const queued = await pendingAll();
+      const fromQueue: Local = {};
+      for (const e of queued) {
+        if (mine.has(e.deviceId) && SEWING_OPS.has(e.op)) (fromQueue[e.bundleCode] ??= []).push(e.op);
+      }
+      setLocal(fromQueue);
+      // Scans a visit queued and never sent, from a guest the server has
+      // since purged: their device is no longer this guest's and would get 403
+      // for good. The visitor is told once, then they go.
+      const earlier = m.guestId ? queued.filter((e) => !mine.has(e.deviceId)) : [];
+      if (earlier.length > 0) {
+        await dropEarlierVisit(earlier);
+        const text = `${earlier.length} scan${earlier.length === 1 ? '' : 's'} from an earlier visit could not be sent · that visit expired`;
+        setFlash({ tone: 'resync', title: 'RESYNC', detail: text });
+        addLog([text]);
+      }
       setUnseen(await allUnseen());
       await refreshWork();
       await ensureDevice(stationRef.current)

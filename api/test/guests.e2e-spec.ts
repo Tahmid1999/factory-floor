@@ -32,6 +32,7 @@ describe('guests', () => {
     const res = await http().get('/me').set('x-forwarded-for', ip).expect(200);
     expect(res.headers['set-cookie'][0]).toMatch(/ff_guest=.*HttpOnly.*SameSite=Lax/i);
     expect(res.body.name).toMatch(/^guest-\d{4}$/);
+    expect(res.body.guestId).toEqual(expect.any(String));
     expect(res.body.mode).toBe('hybrid');
     expect(res.body.serverNow).toBe(clock.now().getTime());
     expect(res.body.bundles).toHaveLength(3);

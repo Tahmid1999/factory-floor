@@ -81,6 +81,39 @@ function nextScanReply(page: Page) {
   });
 }
 
+test('scans queued by a visit that has since expired are named, then dropped', async ({ browser }) => {
+  const page = await guestPage(browser);
+  await expect(scanButton(page)).toBeEnabled();
+  // The batches never reach the server, as for a phone that left the floor.
+  await page.route('**/scans/batch', (route) => route.abort());
+  await scanButton(page).click();
+  await scanButton(page).click();
+  await expect(row(page, 'pending')).toHaveText('2');
+
+  // The guest cookie is gone, as it is a day later: this is a new visitor on
+  // the same phone, and the old device is no longer theirs.
+  await page.context().clearCookies();
+  await page.unroute('**/scans/batch');
+  const batches = watchBatches(page);
+  await page.reload();
+  await expect(flash(page)).toContainText('2 scans from an earlier visit could not be sent · that visit expired');
+  await expect(row(page, 'my pieces today')).toHaveText('0 · $0.00');
+  const left = await page.evaluate(
+    () =>
+      new Promise<number>((resolve, reject) => {
+        const open = indexedDB.open('ff-station');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const count = open.result.transaction('events').objectStore('events').count();
+          count.onsuccess = () => resolve(count.result);
+        };
+      }),
+  );
+  expect(left).toBe(0);
+  await page.waitForTimeout(1000);
+  expect(batches.seqs).toEqual([]);
+});
+
 test('a wiped seq counter carries on above the last seq the server holds', async ({ browser }) => {
   const page = await guestPage(browser);
   await expect(scanButton(page)).toBeEnabled();

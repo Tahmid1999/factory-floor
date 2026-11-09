@@ -15,6 +15,9 @@ const REFILLS_PER_DAY = 10;
 const SIM_CUTTER = 'sim-cutter';
 
 export type MeBody = {
+  // The station keys its devices by this: names are drawn again for new
+  // guests, so a later visitor can get an earlier one's name.
+  guestId: string;
   name: string;
   mode: GuestMode;
   serverNow: number;
@@ -190,6 +193,7 @@ export class GuestsService {
     for (const o of await this.prisma.operation.findMany()) if (o.trimsMills > 0) trims[o.code] = o.trimsMills;
 
     return {
+      guestId: guest.id,
       name: guest.name,
       mode: guest.mode,
       serverNow: now.getTime(),

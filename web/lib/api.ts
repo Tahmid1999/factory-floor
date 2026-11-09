@@ -16,6 +16,7 @@ export type MeBundle = {
 // rates are mills per piece and trims mills per bundle, both as the server
 // prices them now.
 export type Me = {
+  guestId: string;
   name: string;
   mode: Mode;
   serverNow: number;
