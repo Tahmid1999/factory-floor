@@ -1,0 +1,132 @@
+.adm-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #fff;
+  color: #1d1d1d;
+}
+
+.adm-side {
+  width: 168px;
+  flex: none;
+  background: #f4f4f2;
+  border-right: 1px solid #ddd;
+  padding: 8px 0;
+}
+
+.adm-side .ant-menu {
+  background: transparent;
+  border-inline-end: 0;
+}
+
+.adm-main {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px 24px;
+}
+
+.adm-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #ddd;
+  font-size: 12px;
+}
+
+.adm-head label {
+  color: #666;
+  margin-right: 6px;
+}
+
+.adm-head select {
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: #fff;
+}
+
+.adm-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.adm-mute {
+  color: #666;
+}
+
+.adm-main .ant-table-thead > tr > th {
+  background: #f4f4f2;
+}
+
+.adm-main .ant-table-small .ant-table-tbody > tr > td {
+  padding-block: 4px;
+  font-size: 12px;
+}
+
+.adm-main .gate-row > td {
+  background: #fdf1d8;
+}
+
+.adm-main .ant-table-tbody > tr.gate-row:hover > td {
+  background: #fbe8c0;
+}
+
+.adm-main .click-row {
+  cursor: pointer;
+}
+
+.adm-tail {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #444;
+}
+
+.adm-warn {
+  color: #c77700;
+}
+
+.adm-bad {
+  color: #b3261e;
+}
+
+.adm-err {
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  background: #f4f4f2;
+}
+
+.adm-write {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #ddd;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .adm-shell {
+    flex-direction: column;
+  }
+
+  .adm-side {
+    width: auto;
+    border-right: 0;
+    border-bottom: 1px solid #ddd;
+    overflow-x: auto;
+  }
+
+  .adm-side .ant-menu {
+    min-width: 0;
+  }
+}

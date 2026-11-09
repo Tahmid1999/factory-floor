@@ -1,0 +1,166 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { API, ApiError } from './api';
+
+export const ROLES = ['operator', 'qc', 'storekeeper', 'supervisor', 'accounts', 'admin'] as const;
+export type Role = (typeof ROLES)[number];
+export type View = 'floor' | 'bundles' | 'held' | 'stations' | 'audit' | 'payroll' | 'pnl' | 'stock';
+
+// A copy of READS in api/src/auth/roles.ts, used only to hide menu items. The
+// API is the real guard: a hidden view opened by URL still gets its 403.
+export const READS: Record<Role, View[]> = {
+  operator: ['floor'],
+  qc: ['floor', 'bundles'],
+  storekeeper: ['stock'],
+  supervisor: ['floor', 'bundles', 'held', 'stations'],
+  accounts: ['payroll', 'pnl', 'audit'],
+  admin: ['floor', 'bundles', 'held', 'stations', 'audit', 'payroll', 'pnl', 'stock'],
+};
+
+export const isRole = (v: string | null): v is Role => v !== null && (ROLES as readonly string[]).includes(v);
+
+export type Floor = {
+  ops: { op: string; waiting: number; doneToday: number; rateMills: number; gate: boolean }[];
+  simOn: boolean;
+  visitors: number;
+  tail: string[];
+};
+export type BundleRow = {
+  code: string;
+  status: string;
+  nextOp: string | null;
+  round: number;
+  owner: string;
+  wastedMills: number;
+};
+export type TimelineRow = {
+  source: 'batch' | 'gate';
+  op: string;
+  seq: number | null;
+  device: string | null;
+  deviceKind: 'sim' | 'guest' | null;
+  scannedAt: number | null;
+  correctedAt: number;
+  receivedAt: number;
+  result: string;
+  held: boolean;
+  released: boolean;
+  heldAt: number | null;
+  wasted: boolean;
+  round: number | null;
+  postedMills: number;
+};
+export type BundleDetail = BundleRow & { events: TimelineRow[] };
+export type HeldRow = {
+  code: string | null;
+  op: string | null;
+  device: string | null;
+  heldAt: number;
+  ageSec: number;
+  stuck: boolean;
+};
+export type StationRow = {
+  device: string;
+  kind: 'sim' | 'guest';
+  guest?: string;
+  simName?: string;
+  lastSyncAt: number | null;
+  lastPending: number;
+  clockOffsetMs: number;
+  offlineFor: number | null;
+};
+export type AuditRow = {
+  id: string;
+  at: number;
+  actor: string;
+  role: string;
+  action: string;
+  entity: string;
+  before: unknown;
+  after: unknown;
+};
+
+const POLL_MS = 2500;
+
+// Adds ?as= to a path that may already have a query.
+export function withAs(path: string, as: Role | null): string {
+  if (!as) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}as=${as}`;
+}
+
+export async function adminCall<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    ...init,
+    credentials: 'include',
+    headers: init.body ? { 'content-type': 'application/json' } : undefined,
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(res.status, body?.error ?? `http ${res.status}`, body ?? {});
+  return body as T;
+}
+
+export type Polled<T> = { data: T | null; error: ApiError | null; offline: boolean };
+
+// Polls every 2.5 s. A refused view (4xx) is the answer and stops the polling
+// until the path changes; a network failure keeps the last rows and retries.
+export function usePoll<T>(path: string): Polled<T> {
+  const [state, setState] = useState<Polled<T>>({ data: null, error: null, offline: false });
+
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    setState({ data: null, error: null, offline: false });
+
+    const tick = async () => {
+      try {
+        const data = await adminCall<T>(path);
+        if (alive) setState({ data, error: null, offline: false });
+      } catch (e) {
+        if (!alive) return;
+        if (e instanceof ApiError) {
+          setState({ data: null, error: e, offline: false });
+          return;
+        }
+        setState((s) => ({ ...s, offline: true }));
+      }
+      if (alive) timer = setTimeout(tick, POLL_MS);
+    };
+    tick();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [path]);
+
+  return state;
+}
+
+export type Session = { login: string; role: Role } | null;
+
+// undefined while the first answer is pending, so the header does not flash a
+// login link at someone who is already in.
+export function useSession(): { session: Session | undefined; reload: () => void } {
+  const [session, setSession] = useState<Session | undefined>(undefined);
+  const reload = useCallback(() => {
+    adminCall<Session>('/admin/session')
+      .then((s) => setSession(s ?? null))
+      .catch(() => setSession(null));
+  }, []);
+  useEffect(reload, [reload]);
+  return { session, reload };
+}
+
+export function hhmmss(ms: number | null, withMs = false): string {
+  if (ms === null) return '-';
+  const d = new Date(ms);
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  const base = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return withMs ? `${base}.${p(d.getMilliseconds(), 3)}` : base;
+}
+
+// Mills to dollars at the precision rates are set in: 15 -> $0.015.
+export function rate(mills: number): string {
+  if (mills === 0) return '-';
+  return `$${Math.floor(mills / 1000)}.${String(mills % 1000).padStart(3, '0')}`;
+}
