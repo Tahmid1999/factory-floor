@@ -132,7 +132,10 @@ export class GateService {
     const [bundle] = await tx.$queryRaw<Bundle[]>`
       SELECT * FROM "Bundle" WHERE "code" = ${body.bundleCode} FOR UPDATE`;
     // An unknown code gets the same answer as someone else's bundle.
-    if (!bundle || !mayScan(actor, bundle, now)) throw new ForbiddenException({ error: 'not your bundle' });
+    const owner = actor.sim && bundle?.guestId ? await tx.guest.findUnique({ where: { id: bundle.guestId } }) : null;
+    if (!bundle || !mayScan(actor, { ...bundle, guestLastActiveAt: owner?.lastActiveAt ?? null }, now)) {
+      throw new ForbiddenException({ error: 'not your bundle' });
+    }
     // Checked under the lock: a repeat that waited behind the first call must
     // see what the first one committed.
     const repeat = await this.repeatOf(tx, body.gateId, device.id);

@@ -59,7 +59,11 @@ export class IngestService {
 
     const reply = await this.prisma.$transaction(async (tx): Promise<BatchReply> => {
       const codes = [...new Set(body.events.map((e) => e.bundleCode))];
-      const bundles = new Map((await tx.bundle.findMany({ where: { code: { in: codes } } })).map((b) => [b.code, b]));
+      const bundles = new Map(
+        (await tx.bundle.findMany({ where: { code: { in: codes } }, include: { guest: { select: { lastActiveAt: true } } } })).map(
+          (b) => [b.code, b],
+        ),
+      );
       const resync = new Map<string, Resync>();
       const results: Verdict[] = [];
 
@@ -78,7 +82,7 @@ export class IngestService {
         // An unknown code gets the same answer as someone else's bundle so the
         // reply does not say which codes exist.
         const bundle = bundles.get(e.bundleCode);
-        if (!bundle || !mayScan(actor, bundle, now)) {
+        if (!bundle || !mayScan(actor, { ...bundle, guestLastActiveAt: bundle.guest?.lastActiveAt ?? null }, now)) {
           reject('not-yours');
           continue;
         }
