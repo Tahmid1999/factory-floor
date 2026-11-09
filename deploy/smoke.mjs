@@ -143,6 +143,16 @@ await check('/events/recent is not empty', async () => {
   return `${found.length} lines`;
 });
 
+// The sim's work list answers the sim key from the worker's own address only.
+// Through the proxy it must look like any unknown route, key or no key; set
+// SIM_KEY in the environment to check that the real key is refused too.
+await check('/sim/work answers 404 from outside', async () => {
+  const headers = process.env.SIM_KEY ? { 'x-sim-key': process.env.SIM_KEY } : {};
+  const res = await fetch(`${api}/sim/work?station=S-07`, { headers, signal: AbortSignal.timeout(10_000) });
+  expect(res.status === 404, `answered ${res.status}`);
+  return process.env.SIM_KEY ? 'with the sim key' : 'without a key';
+});
+
 // The station pages are served by Vercel with their own frame policy: the
 // admin may be embedded by the portfolio, everything else may not.
 async function page(path) {
