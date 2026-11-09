@@ -1,8 +1,10 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { assertProductionSecrets } from './secrets';
 
 async function main() {
+  assertProductionSecrets(process.env);
   const app = await NestFactory.create(AppModule);
   // The station page is served from its own origin and the guest lives in a
   // cookie, so the browser only sends it to an origin named here.
