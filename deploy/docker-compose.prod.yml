@@ -1,0 +1,164 @@
+# Production stack for the API and worker, next to Live Room on the same VM.
+# Caddy (in the demo-host repo) is the only public listener and reaches the API
+# on 127.0.0.1:4201. Postgres and RabbitMQ publish nothing. The web app is on
+# Vercel. Start it with deploy.sh, which passes --env-file .env.
+name: factory-floor
+
+# Memory ceilings, in MB: postgres 384, rabbitmq 256, api 256, worker 192. They
+# add up to 1088, which leaves room for Live Room (1952) and Caddy (128) in 4 GB.
+
+x-api-env: &api-env
+  NODE_ENV: production
+  # Old space below the container limit so Node collects before the OOM killer acts.
+  NODE_OPTIONS: --max-old-space-size=${NODE_OLD_SPACE_MB:-160}
+  DATABASE_URL: postgresql://ff_app:${FF_APP_PASSWORD:?run with --env-file .env}@postgres:5432/factory
+  RABBIT_URL: amqp://${RABBIT_USER:?run with --env-file .env}:${RABBIT_PASSWORD:?run with --env-file .env}@rabbitmq:5672
+  COOKIE_SECRET: ${COOKIE_SECRET:?run with --env-file .env}
+  ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?run with --env-file .env}
+  SIM_KEY: ${SIM_KEY:?run with --env-file .env}
+  SIM_ENABLED: "1"
+  PORT: "4120"
+
+services:
+  # The init scripts only run on an empty data directory. The healthcheck asks
+  # over TCP because the temporary server the entrypoint runs during init
+  # listens on the socket alone, so a socket check would pass before the roles
+  # exist. Settings are sized for a 384 MB container and two small pools.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 384m
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=40", "-c", "work_mem=4MB"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?run with --env-file .env}
+      FF_OWNER_PASSWORD: ${FF_OWNER_PASSWORD:?run with --env-file .env}
+      FF_APP_PASSWORD: ${FF_APP_PASSWORD:?run with --env-file .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./pg-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+      - ./pg-passwords.sh:/docker-entrypoint-initdb.d/20-passwords.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBIT_USER:?run with --env-file .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD:?run with --env-file .env}
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/conf.d/20-memory.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  # Published on loopback only, host port 4201 to the container's 4120. HOST
+  # makes Node listen on all container interfaces so the published port can
+  # reach it. Caddy shows up here as the network gateway, not as loopback, so
+  # TRUST_PROXY names that one address (fixed by the subnet below); the API
+  # then reads the visitor's address from X-Forwarded-For. Caddy's default is to
+  # overwrite that header from untrusted clients, which is what keeps a visitor
+  # from claiming to be 127.0.0.1 and passing the sim check.
+  api:
+    build: ../api
+    image: factory-floor-api
+    restart: unless-stopped
+    mem_limit: 256m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4201:4120"
+    environment:
+      <<: *api-env
+      HOST: 0.0.0.0
+      TRUST_PROXY: loopback, 10.241.2.1
+      WEB_ORIGIN: ${WEB_ORIGIN:-https://factory.tahmidalavi.com}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # The simulator calls the API with x-sim-key, and the API honours that header
+  # only when the request comes from loopback. A call through the published port
+  # would arrive from the Docker gateway and be refused, so the worker joins
+  # the API container's network namespace and reaches it on its own 127.0.0.1.
+  # It therefore publishes nothing, and reaches Postgres and RabbitMQ through
+  # the API's network. The worker exits when RabbitMQ is down at boot, so the
+  # restart policy and the healthy dependencies bring it back. restart: true
+  # recreates it whenever compose recreates the API, because a namespace is
+  # gone once its owner restarts.
+  worker:
+    image: factory-floor-api
+    command: ["node", "dist/worker"]
+    network_mode: "service:api"
+    restart: unless-stopped
+    mem_limit: 192m
+    depends_on:
+      api:
+        condition: service_healthy
+        restart: true
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NODE_OPTIONS: --max-old-space-size=${WORKER_OLD_SPACE_MB:-130}
+      API_INTERNAL_URL: http://127.0.0.1:4120
+
+  # One-off jobs, run by deploy.sh with `compose run --rm`. They are in a
+  # profile so `up` never starts them. Only migrate holds the ff_owner
+  # password, so the long-running containers never see it; only seed holds
+  # ADMIN_PASSWORD. They use the image the api service builds.
+  migrate:
+    image: factory-floor-api
+    profiles: ["tools"]
+    command: ["npm", "run", "migrate:prod"]
+    mem_limit: 256m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      OWNER_DATABASE_URL: postgresql://ff_owner:${FF_OWNER_PASSWORD:?run with --env-file .env}@postgres:5432/factory
+
+  seed:
+    image: factory-floor-api
+    profiles: ["tools"]
+    command: ["npm", "run", "seed:prod"]
+    mem_limit: 256m
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://ff_app:${FF_APP_PASSWORD:?run with --env-file .env}@postgres:5432/factory
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?run with --env-file .env}
+
+volumes:
+  pgdata:
+  rabbitdata:
+
+# A fixed subnet so TRUST_PROXY above can name the gateway. 10.241.1.0/24 is
+# Live Room's; this is the next one in the demo-host README's numbering.
+networks:
+  default:
+    name: factory-floor
+    ipam:
+      config:
+        - subnet: 10.241.2.0/24
+          gateway: 10.241.2.1
