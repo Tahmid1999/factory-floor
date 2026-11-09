@@ -32,8 +32,10 @@ export default function Hood() {
 
   return (
     <main className="hood mono" data-live={live}>
-      {rows.map((e, i) => (
-        <div key={`${e.t}:${i}`} data-kind={e.kind}>
+      {/* The same three fields the rows are deduplicated on, so the key is unique
+          and a row keeps its node when a new line pushes it down. */}
+      {rows.map((e) => (
+        <div key={`${e.t}:${e.proc}:${e.text}`} data-kind={e.kind}>
           <span className="hood-t">{time(e.t)}</span> <span className="hood-p">{e.proc}</span> {e.text}
         </div>
       ))}
