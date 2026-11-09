@@ -60,7 +60,8 @@ describe('guests', () => {
       kind: 'labour',
       amountMills: 200,
       period: '2026-11',
-      isSimulated: false,
+      // the sim cutter did the work, so "exclude simulated" leaves it out
+      isSimulated: true,
       guestId: bundle.guestId,
       eventId: ev.id,
     });

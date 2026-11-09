@@ -74,8 +74,9 @@ export class GuestsService {
     throw new HttpException({ error: 'could not name a guest, try again' }, 503);
   }
 
-  // The guest owns the bundle and is paid for the cut; the sim cutter only
-  // did the work, so the event is simulated and the posting is not.
+  // The guest owns the bundle, but the sim cutter did the work, so both the
+  // event and the posting are simulated: "exclude simulated" must leave only
+  // what the visitor scanned.
   private async addBundles(tx: Tx, guestId: string, count: number, now: Date): Promise<void> {
     const style = await tx.style.findUniqueOrThrow({ where: { code: STYLE_CODE } });
     const rates = await tx.pieceRate.findMany({ where: { styleId: style.id } });
@@ -116,7 +117,7 @@ export class GuestsService {
           bundleCode: bundle.code,
           eventId: event.id,
           guestId,
-          isSimulated: false,
+          isSimulated: true,
         },
       });
     }

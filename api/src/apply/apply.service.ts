@@ -138,6 +138,7 @@ export class ApplyService {
 
   private async applyStep(w: Work, row: ScanInbox): Promise<void> {
     const { tx, bundle, state } = w;
+    const isSimulated = await this.simulatedDevice(tx, row.deviceId, bundle);
     const event = await tx.bundleEvent.create({
       data: {
         bundleId: bundle.id,
@@ -147,7 +148,7 @@ export class ApplyService {
         inboxId: row.id,
         round: state.reworkRound,
         correctedAt: row.correctedAt,
-        isSimulated: await this.simulatedDevice(tx, row.deviceId, bundle),
+        isSimulated,
         createdAt: w.now,
       },
     });
@@ -167,7 +168,9 @@ export class ApplyService {
             bundleCode: bundle.code,
             eventId: event.id,
             guestId: bundle.guestId,
-            isSimulated: bundle.isSimulated,
+            // Follows whoever did the work, so "exclude simulated" in the
+            // P&L leaves exactly the visitor's own scans.
+            isSimulated,
             createdAt: w.now,
           },
         });
