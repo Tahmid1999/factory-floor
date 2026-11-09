@@ -151,6 +151,30 @@ describe('guests', () => {
       expect(typeof a.body.registeredAt).toBe('string');
     });
 
+    it('returns the highest seq the server holds for the device', async () => {
+      const agent = request.agent(app.getHttpServer());
+      const ip = freshIp();
+      const me = await agent.get('/me').set('x-forwarded-for', ip).expect(200);
+      const reg = () => agent.post('/devices').set('x-forwarded-for', ip).send({ station: 'S-07' }).expect(201);
+      const first = await reg();
+      expect(first.body.lastSeq).toBe(0);
+      const now = clock.now().getTime();
+      const events = [1, 2, 3].map((seq, i) => ({
+        seq,
+        bundleCode: me.body.bundles[i].code,
+        op: 'sew_collar',
+        scannedAt: now,
+        offsetMs: 0,
+      }));
+      await agent
+        .post('/scans/batch')
+        .set('x-forwarded-for', ip)
+        .send({ deviceId: first.body.deviceId, deviceNow: now, events })
+        .expect(201);
+      const again = await reg();
+      expect(again.body).toMatchObject({ deviceId: first.body.deviceId, lastSeq: 3 });
+    });
+
     it('refuses sim-only stations for guests with 403', async () => {
       await http().post('/devices').set('x-forwarded-for', freshIp()).send({ station: 'X-01' }).expect(403);
     });

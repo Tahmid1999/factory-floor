@@ -57,6 +57,6 @@ export class GuestsController {
     } else {
       device = await this.guests.registerGuestDevice(req.actor.guestId!, station);
     }
-    return { deviceId: device.id, registeredAt: device.registeredAt };
+    return { deviceId: device.id, registeredAt: device.registeredAt, lastSeq: await this.guests.lastSeq(device.id) };
   }
 }

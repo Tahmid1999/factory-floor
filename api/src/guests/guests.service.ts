@@ -214,6 +214,13 @@ export class GuestsService {
     });
   }
 
+  // The highest seq the server holds for a device, so a station whose own
+  // counter was wiped carries on above it instead of reusing a seq.
+  async lastSeq(deviceId: string): Promise<number> {
+    const r = await this.prisma.scanInbox.aggregate({ where: { deviceId }, _max: { seq: true } });
+    return r._max.seq ?? 0;
+  }
+
   registerSimDevice(station: StationCode, simName: string) {
     return this.prisma.$transaction((tx) => this.ensureSimDevice(tx, station, simName, this.clock.now()));
   }
