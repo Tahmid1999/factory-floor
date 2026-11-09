@@ -68,6 +68,11 @@ describe('under the hood', () => {
     expect(line.proc).toBe('api');
     expect(line.text).toMatch(BATCH_LINE);
     expect(line.text).toMatch(/^batch dev-S08 seq 2-4 · 3 in · 3 rejected \(rework\) · \d+ ms$/);
+    // Three scans of one bundle turned back: one resync line, no ids or names.
+    await until(async () => (await recent()).some((e) => e.kind === 'resync'));
+    expect((await recent()).filter((e) => e.kind === 'resync').map((e) => e.text)).toEqual([
+      `resync ${code} → rework · dev-S08`,
+    ]);
   });
 
   it('replays the buffer first, then goes live, and keeps the connection warm', async () => {

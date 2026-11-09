@@ -56,6 +56,7 @@ export class IngestService {
     const now = this.clock.now();
     const nowMs = now.getTime();
     const acceptedIds: string[] = [];
+    let stoppedNow: Resync[] = [];
 
     const reply = await this.prisma.$transaction(async (tx): Promise<BatchReply> => {
       const codes = [...new Set(body.events.map((e) => e.bundleCode))];
@@ -65,6 +66,9 @@ export class IngestService {
         ),
       );
       const resync = new Map<string, Resync>();
+      // Bundles this batch was turned back from, for the hood. A resync that
+      // only repeats a notice is not news a second time.
+      const stopped = new Set<string>();
       const results: Verdict[] = [];
 
       for (const e of body.events) {
@@ -114,6 +118,7 @@ export class IngestService {
           const rejected = first?.result?.match(/^rejected\((.+)\)$/);
           if (rejected) {
             resync.set(bundle.code, resyncOf(bundle));
+            stopped.add(bundle.code);
             results.push({ seq: e.seq, result: 'rejected', reason: rejected[1] });
           } else {
             results.push({ seq: e.seq, result: 'duplicate' });
@@ -128,6 +133,7 @@ export class IngestService {
           const reason = bundle.status === 'scrapped' ? 'scrapped' : 'rework';
           await tx.scanInbox.update({ where: { id }, data: { result: `rejected(${reason})` } });
           resync.set(bundle.code, resyncOf(bundle));
+          stopped.add(bundle.code);
           results.push({ seq: e.seq, result: 'rejected', reason });
         } else {
           acceptedIds.push(id);
@@ -161,6 +167,10 @@ export class IngestService {
         data: { lastSyncAt: now, lastPending: body.events.length, clockOffsetMs: offset },
       });
 
+      stoppedNow = [...stopped].flatMap((c) => {
+        const r = resync.get(c);
+        return r && (r.status === 'rework' || r.status === 'scrapped') ? [r] : [];
+      });
       return { serverNow: nowMs, results, resync: [...resync.values()], notices };
     });
 
@@ -177,6 +187,7 @@ export class IngestService {
       }
     }
     this.announce(device, body, reply, started);
+    for (const r of stoppedNow) this.hood.emit('resync', `resync ${r.bundleCode} → ${r.status} · ${deviceLabel(device)}`);
     return reply;
   }
 
