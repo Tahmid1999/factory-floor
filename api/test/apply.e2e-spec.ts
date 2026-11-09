@@ -314,32 +314,86 @@ describe('apply worker', () => {
     await until(async () => hood.some((h) => h.text === 'sweep republished 1' && h.proc === 'worker'), 2000);
   });
 
+  // A worker that dies holds the message unacked; the broker gives it out
+  // again when the connection goes, with nothing of the first try committed.
   it('writes nothing when the worker dies after the lock, then applies the redelivery once', async () => {
     const g = await guest(['S-07']);
+    const rabbit = worker.get(Rabbit);
     const spy = jest.spyOn(worker.get(ApplyService), 'apply');
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     let calls = 0;
-    let seenMidway = -1;
-    hooks.beforeCommit = async (inboxId) => {
+    let release!: () => void;
+    const hung = new Promise<void>((r) => (release = r));
+    hooks.beforeCommit = async () => {
       calls++;
       if (calls > 1) return;
       // The event, posting and result are written by now but not committed.
-      seenMidway = await prisma.bundleEvent.count({ where: { inboxId } });
+      // The connection goes while this transaction is still open.
+      await (rabbit as any).conn.close();
+      await hung;
       throw new Error('worker died');
     };
     await g.send('S-07', [ev(1, g.codes[0], 'sew_collar', 1000)]);
     const row = await inboxOf(g.devices['S-07'], 1);
+    // The redelivery waits on the bundle lock the dying try still holds.
+    await until(async () => spy.mock.calls.length === 2);
+    release();
     await until(() => resultOf(g.devices['S-07'], 1, 'applied'));
 
     expect(calls).toBe(2);
-    expect(seenMidway).toBe(0);
-    const settled = await Promise.allSettled(spy.mock.results.map((r) => r.value));
-    expect(settled.map((s) => s.status)).toEqual(['rejected', 'fulfilled']);
     expect(await prisma.bundleEvent.count({ where: { inboxId: row.id } })).toBe(1);
     const event = await prisma.bundleEvent.findUniqueOrThrow({ where: { inboxId: row.id } });
     expect(await prisma.posting.count({ where: { eventId: event.id } })).toBe(1);
     const b = await prisma.bundle.findUniqueOrThrow({ where: { code: g.codes[0] } });
     expect(POLO_ROUTE[b.nextStep]).toBe('sew_sleeve');
+  });
+
+  // An apply that throws is nacked without a requeue, so a poison message
+  // does not spin the worker; the sweep is its retry.
+  it('drops a message whose apply throws, writes nothing, and the sweep applies it once', async () => {
+    const g = await guest(['S-07']);
+    const spy = jest.spyOn(worker.get(ApplyService), 'apply');
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    let calls = 0;
+    hooks.beforeCommit = async () => {
+      calls++;
+      if (calls === 1) throw new Error('apply failed');
+    };
+    await g.send('S-07', [ev(1, g.codes[0], 'sew_collar', 1000)]);
+    const row = await inboxOf(g.devices['S-07'], 1);
+    await until(async () => spy.mock.results.length === 1);
+    await expect(spy.mock.results[0].value).rejects.toThrow('apply failed');
+
+    // A requeue would be back within milliseconds.
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(calls).toBe(1);
+    expect((await inboxOf(g.devices['S-07'], 1)).result).toBeNull();
+    expect(await prisma.bundleEvent.count({ where: { inboxId: row.id } })).toBe(0);
+
+    clock.advance(31_000);
+    expect(await worker.get(SweepService).runOnce()).toBe(1);
+    await until(() => resultOf(g.devices['S-07'], 1, 'applied'));
+    expect(calls).toBe(2);
+    expect(await prisma.bundleEvent.count({ where: { inboxId: row.id } })).toBe(1);
+    const event = await prisma.bundleEvent.findUniqueOrThrow({ where: { inboxId: row.id } });
+    expect(await prisma.posting.count({ where: { eventId: event.id } })).toBe(1);
+  });
+
+  it('settles a scan whose bundle is gone as rejected(gone), so the sweep stops sending it', async () => {
+    const g = await guest(['S-07']);
+    jest.spyOn(api.get(Rabbit), 'publishApply').mockRejectedValueOnce(new Error('broker down'));
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    await g.send('S-07', [ev(1, g.codes[0], 'sew_collar', 1000)]);
+    // The bundle goes before the row is applied, as a reset would take it.
+    await prisma.bundle.delete({ where: { code: g.codes[0] } });
+
+    clock.advance(31_000);
+    const sweep = worker.get(SweepService);
+    expect(await sweep.runOnce()).toBe(1);
+    await until(() => resultOf(g.devices['S-07'], 1, 'rejected(gone)'));
+    clock.advance(31_000);
+    expect(await sweep.runOnce()).toBe(0);
   });
 });
 
