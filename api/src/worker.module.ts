@@ -1,11 +1,15 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { CLOCK, SystemClock } from './clock';
-import { PrismaService } from './prisma.service';
-import { Rabbit } from './rabbit';
+import { ScheduleModule } from '@nestjs/schedule';
+import { ApplyModule } from './apply/apply.module';
+import { CoreModule } from './core.module';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../.env', '.env'] })],
-  providers: [PrismaService, Rabbit, { provide: CLOCK, useClass: SystemClock }],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../.env', '.env'] }),
+    ScheduleModule.forRoot(),
+    CoreModule,
+    ApplyModule,
+  ],
 })
 export class WorkerModule {}
