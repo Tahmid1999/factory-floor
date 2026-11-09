@@ -1,6 +1,8 @@
 import { INestApplication, INestApplicationContext, Type } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as amqp from 'amqplib';
+import { randomUUID } from 'node:crypto';
+import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import { AppModule } from '../src/app.module';
 import { CLOCK, Clock, FixedClock } from '../src/clock';
@@ -57,5 +59,50 @@ export async function purgeQueues(): Promise<void> {
     await ch.purgeQueue(APPLY_QUEUE);
   } finally {
     await conn.close();
+  }
+}
+
+let nextIp = 100;
+
+// A visitor with one device per station asked for, and the visitor's 3
+// bundles. The clock moves a minute on so the devices exist before any scan.
+export async function makeGuest(api: INestApplication, clock: FixedClock, stations: string[]) {
+  const agent = request.agent(api.getHttpServer());
+  const ip = `198.51.100.${nextIp++}`;
+  const me = await agent.get('/me').set('x-forwarded-for', ip).expect(200);
+  const devices: Record<string, string> = {};
+  for (const station of stations) {
+    const dev = await agent.post('/devices').set('x-forwarded-for', ip).send({ station }).expect(201);
+    devices[station] = dev.body.deviceId;
+  }
+  clock.advance(60_000);
+  const codes: string[] = me.body.bundles.map((b: { code: string }) => b.code);
+  const ev = (seq: number, bundleCode: string, op: string, agoMs = 0) => ({
+    seq,
+    bundleCode,
+    op,
+    scannedAt: clock.now().getTime() - agoMs,
+    offsetMs: 0,
+  });
+  const batch = (station: string, events: object[]) =>
+    agent
+      .post('/scans/batch')
+      .set('x-forwarded-for', ip)
+      .send({ deviceId: devices[station], deviceNow: clock.now().getTime(), events });
+  const gate = (station: string, body: object) =>
+    agent
+      .post('/gate/scan')
+      .set('x-forwarded-for', ip)
+      .send({ deviceId: devices[station], gateId: randomUUID(), ...body });
+  return { name: me.body.name as string, ip, devices, codes, ev, batch, gate };
+}
+
+export async function until<T>(check: () => Promise<T | undefined | false>, ms = 20000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await check();
+    if (v) return v;
+    if (Date.now() > end) throw new Error('timed out waiting');
+    await new Promise((r) => setTimeout(r, 50));
   }
 }

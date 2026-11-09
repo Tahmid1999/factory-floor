@@ -3,4 +3,6 @@ export type HoodEvent = {
   kind: 'batch' | 'apply' | 'held' | 'released' | 'gate' | 'resync' | 'rework' | 'clear' | 'sweep' | 'limit' | 'purge';
   proc: 'api' | 'worker';
   text: string;
+  // Set by Rabbit on the wire only; never stored or shown.
+  pid?: string;
 };

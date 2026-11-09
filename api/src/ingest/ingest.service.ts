@@ -5,6 +5,7 @@ import { CLOCK, Clock } from '../clock';
 import { Actor, mayScan } from '../guests/ownership';
 import { POLO_ROUTE } from '../line/line';
 import { PrismaService } from '../prisma.service';
+import { deviceLabel, HoodService } from '../hood/hood';
 import { Rabbit } from '../rabbit';
 
 export type BatchEvent = { seq: number; bundleCode: string; op: string; scannedAt: number; offsetMs: number };
@@ -37,6 +38,7 @@ export class IngestService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(Rabbit) private readonly rabbit: Rabbit,
+    @Inject(HoodService) private readonly hood: HoodService,
   ) {}
 
   // A guest owns its own devices and the sim owns the simulated ones. The same
@@ -50,6 +52,7 @@ export class IngestService {
   }
 
   async ingest(actor: Actor, device: Device, body: BatchBody): Promise<BatchReply> {
+    const started = performance.now();
     const now = this.clock.now();
     const nowMs = now.getTime();
     const acceptedIds: string[] = [];
@@ -160,7 +163,23 @@ export class IngestService {
         break;
       }
     }
+    this.announce(device, body, reply, started);
     return reply;
+  }
+
+  // A heartbeat with nothing in it is not worth a line. The reason is named
+  // only when every rejection shares it, so the line stays one short phrase.
+  private announce(device: Device, body: BatchBody, reply: BatchReply, started: number): void {
+    if (body.events.length === 0) return;
+    const seqs = body.events.map((e) => e.seq);
+    const rejected = reply.results.filter((r) => r.result === 'rejected');
+    const reasons = new Set(rejected.map((r) => r.reason));
+    const why = reasons.size === 1 ? ` (${[...reasons][0]})` : '';
+    const ms = Math.round(performance.now() - started);
+    this.hood.emit(
+      'batch',
+      `batch ${deviceLabel(device)} seq ${Math.min(...seqs)}-${Math.max(...seqs)} · ${seqs.length} in · ${rejected.length} rejected${why} · ${ms} ms`,
+    );
   }
 }
 

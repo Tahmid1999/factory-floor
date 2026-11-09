@@ -10,7 +10,7 @@ import { Actor, mayScan } from '../guests/ownership';
 import { StationCode } from '../line/line';
 import { canFlag, decide, rollBackTo } from '../line/state-machine';
 import { PrismaService } from '../prisma.service';
-import { Rabbit } from '../rabbit';
+import { HoodService } from '../hood/hood';
 
 export const GATE_ACTIONS = ['cut', 'qc_flag', 'qc_pass', 'qc_fail', 'ship', 'clear_rework', 'scrap'] as const;
 export type GateAction = (typeof GATE_ACTIONS)[number];
@@ -77,7 +77,7 @@ export class GateService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(GuestsService) private readonly guests: GuestsService,
-    @Inject(Rabbit) private readonly rabbit: Rabbit,
+    @Inject(HoodService) private readonly hood: HoodService,
     @Inject(CLOCK) private readonly clock: Clock,
   ) {}
 
@@ -114,7 +114,7 @@ export class GateService {
       if (isLockTimeout(e)) throw new HttpException({ error: 'bundle busy, scan again' }, 503);
       throw e;
     }
-    void this.announce(hood, reply.ms);
+    this.announce(hood, reply.ms);
     return reply;
   }
 
@@ -329,17 +329,10 @@ export class GateService {
     w.hood.push({ kind: 'gate', text: `gate ${device.code} ${w.bundle.code} ${action}`, timed: true });
   }
 
-  // After commit only, and best effort, as in the worker.
-  private async announce(hood: Hood[], ms: number): Promise<void> {
-    for (const h of hood) {
-      const text = h.timed ? `${h.text} · ${ms} ms` : h.text;
-      try {
-        await this.rabbit.publishHood({ t: this.clock.now().getTime(), kind: h.kind, proc: 'api', text });
-      } catch (err) {
-        this.log.warn(`hood publish dropped: ${(err as Error).message}`);
-        return;
-      }
-    }
+  // After commit only. The hood keeps the line in memory first, so a broker
+  // that is down cannot lose it or undo the scan.
+  private announce(hood: Hood[], ms: number): void {
+    for (const h of hood) this.hood.emit(h.kind, h.timed ? `${h.text} · ${ms} ms` : h.text);
   }
 }
 

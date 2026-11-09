@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as amqp from 'amqplib';
+import { randomUUID } from 'node:crypto';
 import type { HoodEvent } from './hood/hood-event';
 
 export const APPLY_QUEUE = 'scan.apply';
@@ -14,6 +15,9 @@ type ApplyConsumer = { handler: (inboxId: string) => Promise<void>; prefetch: nu
 @Injectable()
 export class Rabbit implements OnModuleDestroy {
   private readonly log = new Logger(Rabbit.name);
+  // Tags what this process publishes to the fanout, so it can tell its own
+  // lines when they come back.
+  readonly pid = randomUUID();
   private conn?: Conn;
   private chan?: Promise<Chan>;
   private applyConsumer?: ApplyConsumer;
@@ -126,7 +130,7 @@ export class Rabbit implements OnModuleDestroy {
 
   async publishHood(e: HoodEvent): Promise<void> {
     const ch = await this.channel();
-    ch.publish(HOOD_EXCHANGE, '', Buffer.from(JSON.stringify(e)));
+    ch.publish(HOOD_EXCHANGE, '', Buffer.from(JSON.stringify({ ...e, pid: this.pid })));
   }
 
   // Each handler gets its own exclusive queue on the fanout. The queue dies

@@ -13,6 +13,7 @@ import {
 import { CLOCK, Clock } from '../clock';
 import { GuestGuard, GuestRequest } from '../guests/guests.guard';
 import { IngestService } from '../ingest/ingest.service';
+import { HoodService } from '../hood/hood';
 import { hit } from '../limits';
 import { DEFECTS, Defect, GATE_ACTIONS, GateAction, GateBody, GateService, stationRefusal } from './gate.service';
 
@@ -57,6 +58,7 @@ export class GateController {
     @Inject(GateService) private readonly gate: GateService,
     @Inject(IngestService) private readonly ingest: IngestService,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(HoodService) private readonly hood: HoodService,
   ) {}
 
   // 200 for a refusal too: the call worked and the reply says ok: false.
@@ -67,6 +69,7 @@ export class GateController {
     // Ownership first, so a stranger cannot spend another device's allowance.
     const device = await this.ingest.deviceFor(req.actor, body.deviceId);
     if (!hit(`gate:${device.id}`, 5, 1, this.clock.now().getTime())) {
+      this.hood.emitLimit(device, 'gate');
       throw new HttpException({ error: 'too many gate calls, slow down' }, 429);
     }
     const refusal = stationRefusal(device.code, body.action);
