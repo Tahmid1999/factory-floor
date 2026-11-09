@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { PieceRate, Prisma } from '@prisma/client';
-import { wasteOf } from '../apply/waste';
+import { wasteOf, wasteOfMany } from '../apply/waste';
 import { audit } from '../audit/audit';
 import { CLOCK, Clock } from '../clock';
 import { deviceLabel, HoodService } from '../hood/hood';
@@ -73,16 +73,18 @@ export class AdminService {
       take: 50,
       include: { guest: { select: { name: true } } },
     });
-    return Promise.all(
-      rows.map(async (b) => ({
-        code: b.code,
-        status: b.status,
-        nextOp: nextOpOf(b),
-        round: b.reworkRound,
-        owner: b.guest?.name ?? 'sim',
-        wastedMills: await wasteOf(this.prisma, b.id),
-      })),
+    const wasted = await wasteOfMany(
+      this.prisma,
+      rows.map((b) => b.id),
     );
+    return rows.map((b) => ({
+      code: b.code,
+      status: b.status,
+      nextOp: nextOpOf(b),
+      round: b.reworkRound,
+      owner: b.guest?.name ?? 'sim',
+      wastedMills: wasted.get(b.id) ?? 0,
+    }));
   }
 
   // Every scan that reached the server for this bundle, applied or not: the

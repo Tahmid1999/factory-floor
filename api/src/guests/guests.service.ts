@@ -5,7 +5,7 @@ import { CLOCK, Clock } from '../clock';
 import { hit } from '../limits';
 import { STATIONS, StationCode, STYLE_CODE } from '../line/line';
 import { rateAt } from '../line/rates';
-import { wasteOf } from '../apply/waste';
+import { wasteOfMany } from '../apply/waste';
 import { PrismaService } from '../prisma.service';
 
 type Tx = Prisma.TransactionClient;
@@ -165,8 +165,10 @@ export class GuestsService {
       orderBy: [{ createdAt: 'asc' }, { code: 'asc' }],
       include: { style: true },
     });
-    const wastedMills = new Map<string, number>();
-    for (const b of bundles) wastedMills.set(b.id, await wasteOf(this.prisma, b.id));
+    const wastedMills = await wasteOfMany(
+      this.prisma,
+      bundles.map((b) => b.id),
+    );
     const paid = new Map<string, Record<string, number>>();
     if (bundles.length > 0) {
       const rows = await this.prisma.$queryRaw<{ bundleCode: string; op: string; mills: bigint }[]>`
