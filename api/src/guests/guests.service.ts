@@ -62,7 +62,7 @@ export class GuestsService {
       const name = `guest-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}`;
       try {
         return await this.prisma.$transaction(async (tx) => {
-          const guest = await tx.guest.create({ data: { name, ipHash, lastActiveAt: now } });
+          const guest = await tx.guest.create({ data: { name, ipHash, lastActiveAt: now, createdAt: now } });
           await this.addBundles(tx, guest.id, BUNDLES_PER_GUEST, now);
           return guest;
         });
@@ -107,6 +107,7 @@ export class GuestsService {
           nextStep: afterCut,
           guestId: o.guestId,
           isSimulated: o.guestId === null,
+          createdAt: o.now,
         },
       });
       const event = await tx.bundleEvent.create({
@@ -119,6 +120,7 @@ export class GuestsService {
           round: 0,
           correctedAt: o.now,
           isSimulated: o.cutter.isSimulated,
+          createdAt: o.now,
         },
       });
       await tx.posting.create({
@@ -130,6 +132,7 @@ export class GuestsService {
           eventId: event.id,
           guestId: o.guestId,
           isSimulated: o.cutter.isSimulated,
+          createdAt: o.now,
         },
       });
       cut.push({ bundle, event });
