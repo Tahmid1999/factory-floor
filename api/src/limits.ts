@@ -12,3 +12,10 @@ export function hit(key: string, max: number, windowSec: number, now: number): b
   w.count += 1;
   return true;
 }
+
+// Read-only twin of hit(), for limits that count failures only: the caller
+// asks first and calls hit() when the try failed.
+export function isLimited(key: string, max: number, windowSec: number, now: number): boolean {
+  const w = windows.get(key);
+  return !!w && now - w.start < windowSec * 1000 && w.count >= max;
+}

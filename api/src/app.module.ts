@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CoreModule } from './core.module';
+import { AuthModule } from './auth/auth.module';
 import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
 import { IngestModule } from './ingest/ingest.module';
@@ -12,6 +13,7 @@ import { IngestModule } from './ingest/ingest.module';
     ScheduleModule.forRoot(),
     CoreModule,
     GuestsModule,
+    AuthModule,
     IngestModule,
   ],
   controllers: [HealthController],

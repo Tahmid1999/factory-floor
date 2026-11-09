@@ -1,4 +1,4 @@
-import { INestApplication, INestApplicationContext } from '@nestjs/common';
+import { INestApplication, INestApplicationContext, Type } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as amqp from 'amqplib';
 import { PrismaClient } from '@prisma/client';
@@ -8,8 +8,13 @@ import { APPLY_QUEUE } from '../src/rabbit';
 import { seedLine } from '../src/seed';
 import { WorkerModule } from '../src/worker.module';
 
-export async function bootApi(clock: Clock = new FixedClock()): Promise<INestApplication> {
-  const mod = await Test.createTestingModule({ imports: [AppModule] })
+type BootOptions = { clock?: Clock; extraControllers?: Type<unknown>[] };
+
+// Takes a bare clock as before, or options when a spec needs routes of its own.
+export async function bootApi(arg: Clock | BootOptions = new FixedClock()): Promise<INestApplication> {
+  const opts: BootOptions = 'now' in arg ? { clock: arg } : arg;
+  const clock = opts.clock ?? new FixedClock();
+  const mod = await Test.createTestingModule({ imports: [AppModule], controllers: opts.extraControllers ?? [] })
     .overrideProvider(CLOCK)
     .useValue(clock)
     .compile();
