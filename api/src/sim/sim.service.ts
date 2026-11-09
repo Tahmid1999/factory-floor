@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { randomUUID } from 'node:crypto';
 import { CLOCK, Clock } from '../clock';
 import { DEFECTS, Defect } from '../gate/gate.service';
+import { hit } from '../limits';
 import { POLO_ROUTE } from '../line/line';
 import { HttpReply, Resync, Send, SimDevice } from './sim-device';
 
@@ -159,10 +160,14 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
       let r: HttpReply;
       try {
         r = await this.http.send('/devices', { station: o.station, simName: o.simName });
-      } catch {
+      } catch (err) {
+        this.warnOnce('register', `${o.station}: ${(err as Error).message}`);
         return false;
       }
-      if (r.status !== 201) return false;
+      if (r.status !== 201) {
+        this.warnOnce('register', `${o.station}: http ${r.status}`);
+        return false;
+      }
       if (BATCH_STATIONS.includes(o.station)) {
         this.batch.set(
           o.station,
@@ -217,10 +222,21 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
   private async work(station: string): Promise<{ bundles: Waiting[]; waitingAtCollar?: number } | null> {
     try {
       const r = await this.http.get(`/sim/work?station=${station}`);
-      return r.status === 200 ? r.body : null;
-    } catch {
+      if (r.status === 200) return r.body;
+      this.warnOnce('work', `${station}: http ${r.status}`);
+      return null;
+    } catch (err) {
+      this.warnOnce('work', `${station}: ${(err as Error).message}`);
       return null;
     }
+  }
+
+  // A sim that cannot reach the api (wrong key, api down, a 404 from the
+  // sim-caller check) otherwise stands still without a word. One line a
+  // minute per kind says why without filling the log every tick.
+  private warnOnce(what: 'register' | 'work', why: string): void {
+    if (!hit(`sim-warn:${what}`, 1, 60, this.clock.now().getTime())) return;
+    this.log.warn(`sim ${what} failed, ${why}`);
   }
 
   private async cut(): Promise<boolean> {
