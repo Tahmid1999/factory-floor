@@ -7,7 +7,7 @@ import { labourMills, rateAt } from '../line/rates';
 import { canFlag, decide } from '../line/state-machine';
 import { PrismaService } from '../prisma.service';
 import { Rabbit } from '../rabbit';
-import { markWaste } from './waste';
+import { markWaste, noticeWasted } from './waste';
 
 export type ApplyOutcome = 'applied' | 'duplicate' | 'held' | 'rejected' | 'skipped';
 
@@ -244,34 +244,7 @@ export class ApplyService {
     await tx.bundle.update({ where: { id: bundle.id }, data: { status: 'rework' } });
 
     const { wastedMills, deviceIds } = await markWaste(tx, bundle.id, row.correctedAt, state.reworkRound);
-    if (deviceIds.length > 0) {
-      const wasted = await tx.bundleEvent.findMany({
-        where: {
-          bundleId: bundle.id,
-          round: state.reworkRound,
-          wasted: true,
-          correctedAt: { gt: row.correctedAt },
-          deviceId: { in: deviceIds },
-        },
-        orderBy: { correctedAt: 'asc' },
-        select: { deviceId: true, inboxId: true },
-      });
-      const inboxIds = wasted.map((e) => e.inboxId).filter((id): id is string => id !== null);
-      const seqs = new Map(
-        (await tx.scanInbox.findMany({ where: { id: { in: inboxIds } }, select: { id: true, seq: true } })).map((r) => [
-          r.id,
-          r.seq,
-        ]),
-      );
-      for (const deviceId of deviceIds) {
-        const e = wasted.find((x) => x.deviceId === deviceId);
-        // A gate event has no inbox row and so no seq the station would know.
-        const seq = e?.inboxId ? (seqs.get(e.inboxId) ?? 0) : 0;
-        await tx.deviceNotice.create({
-          data: { deviceId, seq, bundleCode: bundle.code, result: 'wasted', createdAt: w.now },
-        });
-      }
-    }
+    await noticeWasted(tx, bundle, row.correctedAt, state.reworkRound, deviceIds, w.now);
     await tx.scanInbox.update({ where: { id: row.id }, data: { result: 'applied', appliedAt: w.now } });
     w.hood.push({ kind: 'rework', text: `rework ${bundle.code} qc_flag · wasted ${wastedMills} mills` });
     return 'applied';

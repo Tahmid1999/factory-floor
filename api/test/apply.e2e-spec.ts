@@ -191,6 +191,9 @@ describe('apply worker', () => {
     expect(applied.text).toMatch(/^apply B-\d+ sew_collar · lock \d+ ms · tx \d+ ms$/);
     const postings = await prisma.posting.findMany({ where: { bundleCode: code, kind: 'labour' } });
     expect(postings.map((p) => p.amountMills).sort((a, b) => a - b)).toEqual([200, 240, 300]);
+    // The visitor sewed collar and sleeve; only the cut was the sim's.
+    const sewn = postings.filter((p) => p.amountMills !== 200);
+    expect(sewn.every((p) => !p.isSimulated)).toBe(true);
   });
 
   it('applies an inbox id published three times exactly once', async () => {
@@ -240,6 +243,33 @@ describe('apply worker', () => {
     const sync = await g.send('S-08', []);
     expect(sync.body.notices).toEqual([{ id: notices[0].id, seq: 4, bundleCode: code, result: 'wasted' }]);
     await until(async () => hood.some((h) => h.text === `rework ${code} qc_flag · wasted 530 mills`), 2000);
+  });
+
+  it('prices a wasted redo by what was posted: an unpaid sleeve redo wastes its trims only', async () => {
+    const g = await guest(['S-07', 'S-08', 'Q-01']);
+    const code = g.codes[0];
+    await g.send('S-07', [ev(1, code, 'sew_collar', 50_000)]);
+    await until(() => resultOf(g.devices['S-07'], 1, 'applied'));
+    await g.send('S-08', [ev(1, code, 'sew_sleeve', 40_000)]);
+    await until(() => resultOf(g.devices['S-08'], 1, 'applied'));
+
+    // What a supervisor clear back to sew_sleeve leaves behind; the gate that
+    // does it for real is tested in the gate suite.
+    await prisma.bundle.update({
+      where: { code },
+      data: { reworkRound: 1, nextStep: POLO_ROUTE.indexOf('sew_sleeve'), lastClearedAt: new Date(now() - 30_000) },
+    });
+    await g.send('S-08', [ev(2, code, 'sew_sleeve', 10_000)]);
+    const redo = await until(() => resultOf(g.devices['S-08'], 2, 'applied'));
+    const redoEvent = await prisma.bundleEvent.findUniqueOrThrow({ where: { inboxId: redo.id } });
+    expect(await prisma.posting.count({ where: { eventId: redoEvent.id } })).toBe(0);
+
+    await g.send('Q-01', [ev(1, code, 'qc_flag', 20_000)]);
+    await until(() => resultOf(g.devices['Q-01'], 1, 'applied'));
+    expect((await prisma.bundleEvent.findUniqueOrThrow({ where: { id: redoEvent.id } })).wasted).toBe(true);
+    const me = await g.meNow();
+    expect(me.body.bundles.find((x: { code: string }) => x.code === code).wastedMills).toBe(290);
+    await until(async () => hood.some((h) => h.text === `rework ${code} qc_flag · wasted 290 mills`), 2000);
   });
 
   it('rejects a qc_flag on a bundle not yet past sew_collar, with a notice', async () => {

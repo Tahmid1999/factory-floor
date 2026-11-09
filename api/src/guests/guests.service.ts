@@ -5,6 +5,7 @@ import { CLOCK, Clock } from '../clock';
 import { hit } from '../limits';
 import { STATIONS, StationCode, STYLE_CODE } from '../line/line';
 import { rateAt } from '../line/rates';
+import { wasteOf } from '../apply/waste';
 import { PrismaService } from '../prisma.service';
 
 type Tx = Prisma.TransactionClient;
@@ -140,28 +141,21 @@ export class GuestsService {
       orderBy: { createdAt: 'asc' },
       include: { style: true },
     });
-    const wasted = await this.prisma.bundleEvent.findMany({
-      where: { bundleId: { in: bundles.map((b) => b.id) }, wasted: true },
-    });
-    const ops = await this.prisma.operation.findMany();
-    const trims = new Map(ops.map((o) => [o.code, o.trimsMills]));
-    const rates = await this.prisma.pieceRate.findMany();
+    const wastedMills = new Map<string, number>();
+    for (const b of bundles) wastedMills.set(b.id, await wasteOf(this.prisma, b.id));
 
     return {
       name: guest.name,
       mode: guest.mode,
       serverNow: now.getTime(),
       bundles: bundles.map((b) => {
-        const wastedMills = wasted
-          .filter((e) => e.bundleId === b.id)
-          .reduce((sum, e) => sum + rateAt(rates, b.styleId, e.op, e.correctedAt) * b.pieces + (trims.get(e.op) ?? 0), 0);
         const done = b.status === 'packed' || b.status === 'shipped';
         return {
           code: b.code,
           status: b.status,
           nextOp: done ? null : (b.style.route[b.nextStep] ?? null),
           round: b.reworkRound,
-          wastedMills,
+          wastedMills: wastedMills.get(b.id) ?? 0,
         };
       }),
     };
