@@ -34,8 +34,8 @@ enum PostingKind {
 }
 
 model Style {
-  id              String  @id @default(cuid())
-  code            String  @unique
+  id              String      @id @default(cuid())
+  code            String      @unique
   name            String
   piecesPerBundle Int
   route           String[]
@@ -44,8 +44,8 @@ model Style {
 }
 
 model Operation {
-  code      String  @id
-  isGate    Boolean
+  code       String  @id
+  isGate     Boolean
   trimsMills Int
 }
 
@@ -120,10 +120,10 @@ model ScanInbox {
 }
 
 model HeldEvent {
-  id      String   @id @default(cuid())
-  inboxId String   @unique
+  id       String   @id @default(cuid())
+  inboxId  String   @unique
   bundleId String
-  heldAt  DateTime @default(now())
+  heldAt   DateTime @default(now())
 }
 
 model BundleEvent {
@@ -142,17 +142,17 @@ model BundleEvent {
 }
 
 model Posting {
-  id           String      @id @default(cuid())
-  period       String
-  kind         PostingKind
-  amountMills  Int
-  bundleCode   String
-  eventId      String?
-  guestId      String?
-  guestPurged  Boolean     @default(false)
+  id            String      @id @default(cuid())
+  period        String
+  kind          PostingKind
+  amountMills   Int
+  bundleCode    String
+  eventId       String?
+  guestId       String?
+  guestPurged   Boolean     @default(false)
   adjustsPeriod String?
-  isSimulated  Boolean     @default(false)
-  createdAt    DateTime    @default(now())
+  isSimulated   Boolean     @default(false)
+  createdAt     DateTime    @default(now())
 }
 
 model DeviceNotice {
