@@ -221,8 +221,16 @@ describe('admin reads and writes', () => {
     await prisma.posting.create({
       data: { period: '2026-11', kind: 'labour', amountMills: 555, bundleCode: 'B-1002', isSimulated: true },
     });
+    // A visitor still on the floor with work from last month: the reset takes
+    // the visitor and leaves the October posting as the purge would.
+    const g = await makeGuest(api, clock, ['S-07']);
+    const guest = await prisma.guest.findUniqueOrThrow({ where: { name: g.name } });
+    const kept = await prisma.posting.create({
+      data: { period: '2026-10', kind: 'labour', amountMills: 300, bundleCode: g.codes[0], guestId: guest.id },
+    });
     const octoberBefore = await prisma.posting.aggregate({ where: { period: '2026-10' }, _sum: { amountMills: true } });
     const auditBefore = await prisma.auditLog.count();
+    const resetsBefore = await prisma.auditLog.count({ where: { action: 'reset' } });
 
     await http().post('/admin/reset').expect(401);
     await post('/admin/reset').expect(201);
@@ -236,8 +244,13 @@ describe('admin reads and writes', () => {
     expect(await prisma.deviceNotice.count()).toBe(0);
     expect(await prisma.posting.count({ where: { period: '2026-11' } })).toBe(0);
     expect(await prisma.posting.aggregate({ where: { period: '2026-10' }, _sum: { amountMills: true } })).toEqual(octoberBefore);
+    expect(await prisma.posting.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({
+      guestId: null,
+      guestPurged: true,
+      amountMills: 300,
+    });
     expect(await prisma.auditLog.count()).toBe(auditBefore + 1);
-    expect(await prisma.auditLog.count({ where: { action: 'reset' } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { action: 'reset' } })).toBe(resetsBefore + 1);
     expect(await prisma.user.count()).toBe(1);
     expect(await prisma.style.count()).toBe(1);
     expect(await prisma.pieceRate.count()).toBeGreaterThanOrEqual(7);

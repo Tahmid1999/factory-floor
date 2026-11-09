@@ -6,7 +6,7 @@ import { CLOCK, Clock } from '../clock';
 import { deviceLabel, HoodService } from '../hood/hood';
 import { POLO_ROUTE, STYLE_CODE } from '../line/line';
 import { PrismaService } from '../prisma.service';
-import { deleteGuestData } from '../purge/guest-data';
+import { deleteGuestData, orphanPostings } from '../purge/guest-data';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_MS = 5 * 60 * 1000;
@@ -275,17 +275,18 @@ export class AdminService {
 
     return this.prisma.$transaction(
       async (tx) => {
-        const guests = await tx.guest.findMany({ select: { id: true } });
-        await tx.$executeRaw`DELETE FROM "Posting"
-          WHERE "period" = ${period} AND ("guestId" IS NOT NULL OR "guestPurged" OR "isSimulated")`;
-        await deleteGuestData(
-          tx,
-          guests.map((g) => g.id),
-        );
-
         const simBundles = Prisma.sql`(SELECT "id" FROM "Bundle"
           WHERE "isSimulated" AND "guestId" IS NULL AND "createdAt" >= ${monthStart})`;
         const simDevices = Prisma.sql`(SELECT "id" FROM "Device" WHERE "isSimulated")`;
+        const guests = await tx.guest.findMany({ select: { id: true } });
+        const guestIds = guests.map((g) => g.id);
+        await tx.$executeRaw`DELETE FROM "Posting"
+          WHERE "period" = ${period} AND ("guestId" IS NOT NULL OR "guestPurged" OR "isSimulated")`;
+        // What is left of a live guest's is an earlier month's, which stays
+        // as the purge would leave it.
+        await orphanPostings(tx, guestIds);
+        await deleteGuestData(tx, guestIds);
+
         await tx.$executeRaw`DELETE FROM "HeldEvent" WHERE "bundleId" IN ${simBundles}`;
         await tx.$executeRaw`DELETE FROM "BundleEvent"
           WHERE "isSimulated" AND ("correctedAt" >= ${monthStart} OR "bundleId" IN ${simBundles})`;

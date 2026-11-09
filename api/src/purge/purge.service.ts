@@ -4,7 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { CLOCK, Clock } from '../clock';
 import { PrismaService } from '../prisma.service';
 import { Rabbit } from '../rabbit';
-import { deleteGuestData } from './guest-data';
+import { deleteGuestData, orphanPostings } from './guest-data';
 
 const GUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const SIM_KEEP_MS = 60 * 24 * 60 * 60 * 1000;
@@ -37,7 +37,7 @@ export class PurgeService {
       const ids = guests.map((g) => g.id);
       await this.prisma.$transaction(
         async (tx) => {
-          await tx.posting.updateMany({ where: { guestId: { in: ids } }, data: { guestId: null, guestPurged: true } });
+          await orphanPostings(tx, ids);
           await deleteGuestData(tx, ids);
         },
         { timeout: 30_000 },
