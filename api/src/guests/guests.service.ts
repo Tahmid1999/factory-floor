@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ForbiddenException, HttpException, Inject, Injectable } from '@nestjs/common';
-import { Guest, GuestMode, Prisma } from '@prisma/client';
+import { Bundle, BundleEvent, Device, Guest, GuestMode, Prisma } from '@prisma/client';
 import { CLOCK, Clock } from '../clock';
 import { hit } from '../limits';
 import { STATIONS, StationCode, STYLE_CODE } from '../line/line';
@@ -74,19 +74,29 @@ export class GuestsService {
     throw new HttpException({ error: 'could not name a guest, try again' }, 503);
   }
 
-  // The guest owns the bundle, but the sim cutter did the work, so both the
-  // event and the posting are simulated: "exclude simulated" must leave only
-  // what the visitor scanned.
   private async addBundles(tx: Tx, guestId: string, count: number, now: Date): Promise<void> {
+    const cutter = await this.ensureSimDevice(tx, 'C-01', SIM_CUTTER, now);
+    await this.cutBundles(tx, { count, guestId, cutter, now });
+  }
+
+  // Shared by a new visitor's bundles and the sim's C-01 gate, so every code
+  // comes from the one sequence. A bundle with no guest belongs to the sim.
+  // The cut event and posting follow the cutter: a visitor's bundle cut by the
+  // sim is still the sim's work, so "exclude simulated" leaves only what the
+  // visitor scanned.
+  async cutBundles(
+    tx: Tx,
+    o: { count: number; guestId: string | null; cutter: Device; now: Date; gateId?: string },
+  ): Promise<{ bundle: Bundle; event: BundleEvent }[]> {
     const style = await tx.style.findUniqueOrThrow({ where: { code: STYLE_CODE } });
     const rates = await tx.pieceRate.findMany({ where: { styleId: style.id } });
-    const cutRate = rateAt(rates, style.id, 'cut', now);
-    const cutter = await this.ensureSimDevice(tx, 'C-01', SIM_CUTTER, now);
+    const cutRate = rateAt(rates, style.id, 'cut', o.now);
     const afterCut = style.route.indexOf('sew_collar');
-    const period = now.toISOString().slice(0, 7);
+    const period = o.now.toISOString().slice(0, 7);
 
     const seq = await tx.$queryRaw<{ n: bigint }[]>`
-      SELECT nextval('bundle_code_seq') AS n FROM generate_series(1, ${count}::int)`;
+      SELECT nextval('bundle_code_seq') AS n FROM generate_series(1, ${o.count}::int)`;
+    const cut: { bundle: Bundle; event: BundleEvent }[] = [];
     for (const { n } of seq) {
       const bundle = await tx.bundle.create({
         data: {
@@ -95,7 +105,8 @@ export class GuestsService {
           pieces: style.piecesPerBundle,
           status: 'active',
           nextStep: afterCut,
-          guestId,
+          guestId: o.guestId,
+          isSimulated: o.guestId === null,
         },
       });
       const event = await tx.bundleEvent.create({
@@ -103,10 +114,11 @@ export class GuestsService {
           bundleId: bundle.id,
           op: 'cut',
           source: 'gate',
-          deviceId: cutter.id,
+          deviceId: o.cutter.id,
+          gateId: o.gateId,
           round: 0,
-          correctedAt: now,
-          isSimulated: true,
+          correctedAt: o.now,
+          isSimulated: o.cutter.isSimulated,
         },
       });
       await tx.posting.create({
@@ -116,11 +128,13 @@ export class GuestsService {
           amountMills: cutRate * style.piecesPerBundle,
           bundleCode: bundle.code,
           eventId: event.id,
-          guestId,
-          isSimulated: true,
+          guestId: o.guestId,
+          isSimulated: o.cutter.isSimulated,
         },
       });
+      cut.push({ bundle, event });
     }
+    return cut;
   }
 
   // Idempotent per (simName, station). The unique index cannot do it because
