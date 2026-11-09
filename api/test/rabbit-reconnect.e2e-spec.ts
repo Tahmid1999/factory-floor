@@ -1,6 +1,8 @@
 import { INestApplicationContext } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { Test } from '@nestjs/testing';
 import { Rabbit } from '../src/rabbit';
-import { bootWorker, purgeQueues } from './helpers';
+import { purgeQueues } from './helpers';
 
 async function until(check: () => boolean, ms = 15000) {
   const end = Date.now() + ms;
@@ -17,7 +19,13 @@ describe('rabbit consumer', () => {
 
   beforeAll(async () => {
     await purgeQueues();
-    ctx = await bootWorker();
+    // Rabbit alone: the worker starts its own apply consumer at boot, and
+    // this test needs to be the only one on the queue.
+    const mod = await Test.createTestingModule({
+      imports: [ConfigModule.forRoot({ isGlobal: true })],
+      providers: [Rabbit],
+    }).compile();
+    ctx = await mod.init();
     rabbit = ctx.get(Rabbit);
     await rabbit.consumeApply(async (id) => {
       seen.push(id);
