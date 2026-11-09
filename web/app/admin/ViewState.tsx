@@ -13,10 +13,10 @@ export function ViewState<T>({ poll, children }: { poll: Polled<T>; children: (d
       </div>
     );
   }
-  if (!poll.data) return <div className="adm-mute mono">{poll.offline ? 'api unreachable' : 'loading'}</div>;
+  if (!poll.data) return <div className="adm-mute mono">{poll.offline ? 'offline · retrying' : 'loading'}</div>;
   return (
     <>
-      {poll.offline && <div className="adm-warn mono">api unreachable, showing the last read</div>}
+      {poll.offline && <div className="adm-warn mono">offline · retrying, showing the last read</div>}
       {children(poll.data)}
     </>
   );

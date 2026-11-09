@@ -102,29 +102,38 @@ export async function adminCall<T>(path: string, init: RequestInit = {}): Promis
 
 export type Polled<T> = { data: T | null; error: ApiError | null; offline: boolean };
 
-// Polls every 2.5 s. A refused view (4xx) is the answer and stops the polling
-// until the path changes; a network failure keeps the last rows and retries.
+const BACKOFF_CAP_MS = 30_000;
+
+// Polls every 2.5 s. Only a 403 or 404 is an answer (the role may not read the
+// view, or there is no such bundle) and stops the polling until the path
+// changes. Anything else, a 502 during a redeploy, a 429, a dropped network,
+// keeps the last rows, says so, and retries at 2.5 s doubling to 30 s.
 export function usePoll<T>(path: string): Polled<T> {
   const [state, setState] = useState<Polled<T>>({ data: null, error: null, offline: false });
 
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
+    let wait = POLL_MS;
     setState({ data: null, error: null, offline: false });
 
     const tick = async () => {
+      let delay = POLL_MS;
       try {
         const data = await adminCall<T>(path);
+        wait = POLL_MS;
         if (alive) setState({ data, error: null, offline: false });
       } catch (e) {
         if (!alive) return;
-        if (e instanceof ApiError) {
+        if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
           setState({ data: null, error: e, offline: false });
           return;
         }
         setState((s) => ({ ...s, offline: true }));
+        delay = wait;
+        wait = Math.min(wait * 2, BACKOFF_CAP_MS);
       }
-      if (alive) timer = setTimeout(tick, POLL_MS);
+      if (alive) timer = setTimeout(tick, delay);
     };
     tick();
     return () => {
