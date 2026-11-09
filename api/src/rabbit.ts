@@ -87,10 +87,15 @@ export class Rabbit implements OnModuleDestroy {
 
   // The channel can vanish between delivery and ack; an unacked message is
   // redelivered anyway, so a late ack or nack is only worth a log line.
+  //
+  // A failed apply is dropped, not requeued. A message that always throws
+  // would come straight back and spin the worker at full speed. Its inbox row
+  // still has no result, so the sweep publishes it again 30 s later: a poison
+  // message costs one try per sweep, with no dead-letter queue to watch.
   private settle(ch: Chan, msg: amqp.ConsumeMessage, ok: boolean) {
     try {
       if (ok) ch.ack(msg);
-      else ch.nack(msg, false, true);
+      else ch.nack(msg, false, false);
     } catch (err) {
       this.log.warn(`rabbit ${ok ? 'ack' : 'nack'} dropped: ${(err as Error).message}`);
     }
