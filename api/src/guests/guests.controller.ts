@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { GuestMode } from '@prisma/client';
 import { STATIONS, StationCode } from '../line/line';
+import { ReadLimitGuard } from '../read-limit.guard';
 import { GuestGuard, GuestRequest } from './guests.guard';
 import { GuestsService } from './guests.service';
 
@@ -26,7 +27,9 @@ export class GuestsController {
     return req.guest;
   }
 
+  // The station polls this, so it is the one guest route with a read limit.
   @Get('me')
+  @UseGuards(ReadLimitGuard)
   me(@Req() req: GuestRequest) {
     return this.guests.me(this.guestOf(req));
   }

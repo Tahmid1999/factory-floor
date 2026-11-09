@@ -1,12 +1,15 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Reads, Writes } from '../auth/roles';
 import { ActingRequest } from '../auth/roles.guard';
+import { ReadLimitGuard } from '../read-limit.guard';
 import { AdminService } from './admin.service';
 
 const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
 
 // The guard reads the role from the cookie or ?as=, so none of these check it.
+// The reads are open to anyone, hence the per-address limit.
 @Controller('admin')
+@UseGuards(ReadLimitGuard)
 export class AdminController {
   constructor(@Inject(AdminService) private readonly admin: AdminService) {}
 
