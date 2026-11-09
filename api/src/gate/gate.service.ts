@@ -37,10 +37,14 @@ export type GateReply = {
 
 type Outcome = Omit<GateReply, 'ms'> & { eventId?: string };
 
-// The station gives a gate call 2 s and then shows STOP. Waiting longer than
-// this on a bundle the worker holds would apply a scan the operator was
-// already told did not happen.
-const LOCK_WAIT_MS = 1500;
+// The station gives a gate call 2 s and then shows STOP, so the server's
+// whole budget stays under that: a connection within 250 ms, the bundle lock
+// within 1 s, the transaction done within 1.5 s from its start. Anything
+// longer could commit a scan the operator was already told did not happen.
+// Running out of any of them answers "bundle busy, scan again" instead.
+const CONNECT_WAIT_MS = 250;
+const LOCK_WAIT_MS = 1000;
+const TX_MS = 1500;
 
 const STATION_FOR: Record<GateAction, StationCode> = {
   cut: 'C-01',
@@ -101,7 +105,7 @@ export class GateService {
           if (eventId) await tx.bundleEvent.update({ where: { id: eventId }, data: { gateReply: r } });
           return r;
         },
-        { maxWait: 2000, timeout: 5000 },
+        { maxWait: CONNECT_WAIT_MS, timeout: TX_MS },
       );
     } catch (e) {
       // Two calls with the same gateId on different bundles, or two cuts,
@@ -111,7 +115,7 @@ export class GateService {
         const first = await this.repeatOf(this.prisma, body.gateId, device.id);
         if (first) return first;
       }
-      if (isLockTimeout(e)) throw new HttpException({ error: 'bundle busy, scan again' }, 503);
+      if (isBusy(e)) throw new HttpException({ error: 'bundle busy, scan again' }, 503);
       throw e;
     }
     this.announce(hood, reply.ms);
@@ -358,7 +362,16 @@ function isUniqueGateId(e: unknown): boolean {
   return Array.isArray(target) ? target.includes('gateId') : String(target).includes('gateId');
 }
 
-// Postgres 55P03 is lock_not_available, raised when lock_timeout runs out.
-function isLockTimeout(e: unknown): boolean {
-  return e instanceof Prisma.PrismaClientKnownRequestError && (e.meta as { code?: string } | undefined)?.code === '55P03';
+// Out of time somewhere in the budget above. Postgres 55P03 is
+// lock_not_available, raised when lock_timeout runs out, on the bundle row or
+// on the gateId index behind another call's insert; the second can reach us
+// as an error Prisma does not classify, so its text is checked too. P2028 is
+// a transaction that could not start or ran past its timeout, P2024 no free
+// connection in the pool.
+export function isBusy(e: unknown): boolean {
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    if (e.code === 'P2028' || e.code === 'P2024') return true;
+    if ((e.meta as { code?: string } | undefined)?.code === '55P03') return true;
+  }
+  return e instanceof Error && /55P03|lock timeout/.test(e.message);
 }

@@ -291,9 +291,14 @@ describe('gate scans', () => {
     clock.advance(60_000);
 
     let gateCall: Promise<request.Response> | undefined;
+    let tookMs = 0;
     hooks.beforeCommit = async () => {
       hooks.beforeCommit = () => undefined;
-      gateCall = simGate(qc, { bundleCode: b.code, action: 'qc_pass' }).then((r) => r);
+      const t0 = Date.now();
+      gateCall = simGate(qc, { bundleCode: b.code, action: 'qc_pass' }).then((r) => {
+        tookMs = Date.now() - t0;
+        return r;
+      });
       await gateCall;
     };
     await sim('/scans/batch')
@@ -303,6 +308,8 @@ describe('gate scans', () => {
     const reply = await gateCall!;
     expect(reply.status).toBe(503);
     expect(reply.body).toEqual({ error: 'bundle busy, scan again' });
+    // Inside the station's 2 s, so the operator hears busy rather than STOP.
+    expect(tookMs).toBeLessThan(2000);
     expect(await prisma.bundleEvent.count({ where: { bundleId: b.id, op: 'qc_final' } })).toBe(0);
     await until(() => resultOf(packer, 1, 'held'));
   });
