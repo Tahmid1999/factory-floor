@@ -169,7 +169,8 @@ export class GuestsService {
     const now = this.clock.now();
     const bundles = await this.prisma.bundle.findMany({
       where: { guestId: guest.id },
-      orderBy: { createdAt: 'asc' },
+      // Bundles cut together share a timestamp; the code keeps the order fixed.
+      orderBy: [{ createdAt: 'asc' }, { code: 'asc' }],
       include: { style: true },
     });
     const wastedMills = new Map<string, number>();
@@ -226,7 +227,7 @@ export class GuestsService {
     // at the sleeve again, and holding the visitor to it would stall the demo.
     const untouched = await this.prisma.bundle.findFirst({
       where: { guestId: guest.id, status: 'active', reworkRound: 0, nextStep: style.route.indexOf('sew_collar') },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { code: 'asc' }],
     });
     if (untouched) {
       throw new HttpException({ error: 'finish the bundles you have first', bundle: untouched.code }, 409);
