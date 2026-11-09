@@ -136,6 +136,22 @@ describe('admin reads and writes', () => {
     const later = (await get('/admin/held').expect(200)).body.find((h: { code: string }) => h.code === code);
     expect(later.stuck).toBe(true);
     clock.set(new Date('2026-11-09T10:30:00Z'));
+
+    const sleeve = async () =>
+      (await get(`/admin/bundles/${code}`).expect(200)).body.events.find((e: { op: string }) => e.op === 'sew_sleeve');
+    expect(await sleeve()).toMatchObject({ held: true, released: false, result: 'held' });
+
+    // The step it was waiting for lands, and the worker lets the held one go.
+    await g.batch('S-07', [g.ev(1, code, 'sew_collar', 500)]).expect(201);
+    await until(async () => (await prisma.heldEvent.count()) === 0 || undefined);
+    const done = await until(async () => {
+      const e = await sleeve();
+      return e.result === 'applied' ? e : undefined;
+    });
+    expect(done).toMatchObject({ held: false, released: true, result: 'applied' });
+    expect(typeof done.heldAt).toBe('number');
+    const plain = (await get(`/admin/bundles/${code}`).expect(200)).body.events.find((e: { op: string }) => e.op === 'sew_collar');
+    expect(plain).toMatchObject({ released: false, heldAt: null });
   });
 
   it('lists devices with offline-for in seconds and never a raw device id or the sim key', async () => {

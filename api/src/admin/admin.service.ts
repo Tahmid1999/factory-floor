@@ -132,6 +132,9 @@ export class AdminService {
       receivedAt: r.receivedAt.getTime(),
       result: r.result ?? 'pending',
       held: heldNow.has(r.id),
+      // heldAt stays after release, which deletes the HeldEvent.
+      released: r.heldAt !== null && !heldNow.has(r.id) && r.result === 'applied',
+      heldAt: r.heldAt?.getTime() ?? null,
       ...outcome(eventOfInbox.get(r.id)),
     }));
     // A batch event whose inbox row the 60-day clean-up dropped still counts.
@@ -148,6 +151,8 @@ export class AdminService {
         receivedAt: e.createdAt.getTime(),
         result: 'applied',
         held: false,
+        released: false,
+        heldAt: null as number | null,
         ...outcome(e),
       }));
 

@@ -84,6 +84,7 @@ export class ApplyService {
         return 'duplicate';
       case 'hold':
         await w.tx.heldEvent.create({ data: { inboxId: row.id, bundleId: w.bundle.id, heldAt: w.now } });
+        await w.tx.scanInbox.update({ where: { id: row.id }, data: { heldAt: w.now } });
         await this.settle(w, row, 'held');
         w.hood.push({ kind: 'held', text: `held ${w.bundle.code} ${row.op}` });
         return 'held';

@@ -116,6 +116,7 @@ model ScanInbox {
   receivedAt  DateTime  @default(now())
   result      String?
   appliedAt   DateTime?
+  heldAt      DateTime?
 
   @@unique([deviceId, seq])
   @@index([result, receivedAt])
