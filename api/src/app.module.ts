@@ -9,6 +9,7 @@ import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
 import { HoodModule } from './hood/hood.module';
 import { IngestModule } from './ingest/ingest.module';
+import { SimWorkController } from './sim/sim-work.controller';
 
 @Module({
   imports: [
@@ -22,6 +23,6 @@ import { IngestModule } from './ingest/ingest.module';
     HoodModule,
     AdminModule,
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, SimWorkController],
 })
 export class AppModule {}

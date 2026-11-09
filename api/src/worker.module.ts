@@ -4,6 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ApplyModule } from './apply/apply.module';
 import { CoreModule } from './core.module';
 import { PurgeModule } from './purge/purge.module';
+import { SimModule } from './sim/sim.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { PurgeModule } from './purge/purge.module';
     CoreModule,
     ApplyModule,
     PurgeModule,
+    SimModule,
   ],
 })
 export class WorkerModule {}
