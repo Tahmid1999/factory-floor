@@ -1,14 +1,19 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
-import { CLOCK, SystemClock } from './clock';
+import { CoreModule } from './core.module';
+import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
-import { PrismaService } from './prisma.service';
 import { Rabbit } from './rabbit';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../.env', '.env'] }), ScheduleModule.forRoot()],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['../.env', '.env'] }),
+    ScheduleModule.forRoot(),
+    CoreModule,
+    GuestsModule,
+  ],
   controllers: [HealthController],
-  providers: [PrismaService, Rabbit, { provide: CLOCK, useClass: SystemClock }],
+  providers: [Rabbit],
 })
 export class AppModule {}

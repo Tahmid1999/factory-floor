@@ -81,6 +81,7 @@ model Device {
   lastSyncAt    DateTime?
   lastPending   Int       @default(0)
   clockOffsetMs Int       @default(0)
+  simName       String?
   guest         Guest?    @relation(fields: [guestId], references: [id])
 
   @@unique([guestId, code])

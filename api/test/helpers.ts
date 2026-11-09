@@ -36,6 +36,7 @@ export async function resetDb(): Promise<void> {
       SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
     const list = tables.map((t) => `"${t.tablename}"`).join(', ');
     await owner.$executeRawUnsafe(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+    await owner.$executeRawUnsafe('ALTER SEQUENCE bundle_code_seq RESTART WITH 8492');
     await seedLine(app);
   } finally {
     await owner.$disconnect();
