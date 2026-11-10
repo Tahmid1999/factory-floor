@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { API, ApiError } from './api';
 
 export const ROLES = ['operator', 'qc', 'storekeeper', 'supervisor', 'accounts', 'admin'] as const;
@@ -110,14 +110,21 @@ const BACKOFF_CAP_MS = 30_000;
 // view, or there is no such bundle) and stops the polling until the path
 // changes. Anything else, a 502 during a redeploy, a 429, a dropped network,
 // keeps the last rows, says so, and retries at 2.5 s doubling to 30 s.
-export function usePoll<T>(path: string): Polled<T> {
+//
+// once stops at the first answer, for a list that only changes when this page
+// acts on it; bump round to read it again, keeping the rows meanwhile.
+export function usePoll<T>(path: string, { once = false, round = 0 } = {}): Polled<T> {
   const [state, setState] = useState<Polled<T>>({ data: null, error: null, offline: false });
+  const shown = useRef(path);
 
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     let wait = POLL_MS;
-    setState({ data: null, error: null, offline: false });
+    if (shown.current !== path) {
+      shown.current = path;
+      setState({ data: null, error: null, offline: false });
+    }
 
     const tick = async () => {
       let delay = POLL_MS;
@@ -125,6 +132,7 @@ export function usePoll<T>(path: string): Polled<T> {
         const data = await adminCall<T>(path);
         wait = POLL_MS;
         if (alive) setState({ data, error: null, offline: false });
+        if (once) return;
       } catch (e) {
         if (!alive) return;
         if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
@@ -142,7 +150,7 @@ export function usePoll<T>(path: string): Polled<T> {
       alive = false;
       clearTimeout(timer);
     };
-  }, [path]);
+  }, [path, once, round]);
 
   return state;
 }

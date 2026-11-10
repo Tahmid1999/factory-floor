@@ -12,8 +12,6 @@ import { ViewState } from '../ViewState';
 type Line = { key: string; label: string; mills: number; kind?: string; late?: string; memo?: boolean; total?: boolean };
 
 // Costs read as negatives so the column adds up top to bottom.
-const signed = (mills: number) => (mills < 0 ? `-${money(-mills)}` : money(mills));
-
 function linesOf(p: Pnl): Line[] {
   return [
     { key: 'revenue', label: 'revenue', mills: p.revenue, kind: 'revenue' },
@@ -35,8 +33,10 @@ export default function PnlPage() {
   const [excludeSim, setExcludeSim] = useState(false);
   const [open, setOpen] = useState<Line | null>(null);
   const [note, setNote] = useState('');
+  const [round, setRound] = useState(0);
 
-  const periods = usePoll<PeriodRow[]>(api('/admin/pnl/periods'));
+  // Read on load and after a close; the open month's own numbers are polled below.
+  const periods = usePoll<PeriodRow[]>(api('/admin/pnl/periods'), { once: true, round });
 
   return (
     <ViewState poll={periods}>
@@ -51,6 +51,8 @@ export default function PnlPage() {
           } catch (e) {
             setNote(e instanceof Error ? e.message : 'failed');
           }
+          // Also after a refusal: it may be that the cron closed it first.
+          setRound((r) => r + 1);
         };
         return (
           <>
@@ -126,7 +128,7 @@ function Month({ period, excludeSim, onOpen }: { period: string; excludeSim: boo
                 align: 'right',
                 render: (m: number, l) => (
                   <span className={`mono${l.memo ? ' adm-mute' : ''}`} data-mills={m}>
-                    {signed(m)}
+                    {money(m)}
                   </span>
                 ),
               },
@@ -140,7 +142,8 @@ function Month({ period, excludeSim, onOpen }: { period: string; excludeSim: boo
 
 function Postings({ period, excludeSim, line }: { period: string; excludeSim: boolean; line: Line }) {
   const { api } = useAs();
-  const q = `period=${period}${line.kind ? `&kind=${line.kind}` : ''}${line.late ? '&late=1' : ''}${excludeSim ? '&excludeSim=1' : ''}`;
+  // A kind's line leaves out its late rows; they have a line of their own.
+  const q = `period=${period}${line.kind ? `&kind=${line.kind}` : ''}${line.late ? '&late=1' : '&late=0'}${excludeSim ? '&excludeSim=1' : ''}`;
   const poll = usePoll<{ rows: PostingRow[]; next: string | null }>(api(`/admin/pnl/postings?${q}`));
   const [more, setMore] = useState<PostingRow[]>([]);
   const [next, setNext] = useState<string | null | undefined>(undefined);

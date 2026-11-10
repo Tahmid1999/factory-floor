@@ -128,6 +128,56 @@ test('the close button needs a login, a past month and no close yet', async ({ p
   await expect(page.getByRole('button', { name: /^Close / })).toHaveCount(0);
 });
 
+test('a line drawer leaves out late rows, a found adjustment reads -$1.70, and months are read again only on a close', async ({ page }) => {
+  const cors = { 'access-control-allow-origin': 'http://localhost:3140', 'access-control-allow-credentials': 'true' };
+  const json = (body: unknown) => ({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
+  let monthReads = 0;
+  let pnlReads = 0;
+  const asked: URL[] = [];
+  await page.route('**/admin/session', (r) => r.fulfill(json({ login: 'tahmid', role: 'admin' })));
+  await page.route('**/admin/pnl/periods', (r) => {
+    monthReads++;
+    return r.fulfill(json([{ period: '2020-10', closed: false }]));
+  });
+  await page.route('**/admin/pnl?**', (r) => {
+    pnlReads++;
+    return r.fulfill(
+      json({
+        period: '2020-10', closed: null, revenue: 0, fabric: 0, trims: 0, labour: 0, adjustment: -1700, late: [], contribution: 1700, writeoff: 0,
+        wip: { mills: 0, asOf: '2020-11-01T00:00:00.000Z' },
+      }),
+    );
+  });
+  await page.route('**/admin/pnl/postings?**', (r) => {
+    asked.push(new URL(r.request().url()));
+    return r.fulfill(
+      json({
+        rows: [{ id: 'p1', at: '2020-10-12T09:30:00.000Z', kind: 'adjustment', amountMills: -1700, period: '2020-10', adjustsPeriod: null, bundleCode: null, op: null, device: null, isSimulated: false }],
+        next: null,
+      }),
+    );
+  });
+  await page.route('**/admin/close', (r) => r.fulfill(json({ closed: true })));
+
+  await page.goto('/admin/pnl');
+  await page.locator('[data-row="adjustment"]').click();
+  const drawer = page.locator('.ant-drawer');
+  await expect(drawer.locator('tr.ant-table-row').first()).toContainText('-$1.70');
+  expect(asked[0].searchParams.get('kind')).toBe('adjustment');
+  expect(asked[0].searchParams.get('late')).toBe('0');
+  await drawer.getByRole('button', { name: 'Close' }).click();
+
+  // Two more P&L polls go by without another read of the months.
+  const reads = monthReads;
+  const polls = pnlReads;
+  await expect.poll(() => pnlReads, { timeout: 10_000 }).toBeGreaterThanOrEqual(polls + 2);
+  expect(monthReads).toBe(reads);
+
+  await page.getByRole('button', { name: 'Close October' }).click();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect.poll(() => monthReads).toBe(reads + 1);
+});
+
 test('a guest trap run shows in the bundle timeline with wasted', async ({ browser, page }) => {
   const guest = await guestPage(browser);
   await guest.getByRole('button', { name: 'all async' }).click();
