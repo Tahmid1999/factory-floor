@@ -107,6 +107,9 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
   // scanned, which bundle it looked at, and why it flagged one.
   private readonly scanned = new Set<string>();
   private readonly inspected = new Set<string>();
+  // Kept apart from inline QC's: inline QC also looks at bundles waiting for
+  // final QC, and with one set that look stood in for the final check.
+  private readonly finalChecked = new Set<string>();
   private readonly defects = new Map<string, Defect>();
   // Where a bundle goes next after a scan that is still waiting to be sent.
   private readonly onward = new Map<string, string>();
@@ -290,9 +293,9 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
 
   private async finalCheck(): Promise<boolean> {
     const w = await this.work('Q-02');
-    const b = w?.bundles.find((x) => !this.inspected.has(`${x.code}:${x.nextOp}`));
+    const b = w?.bundles.find((x) => !this.finalChecked.has(`${x.code}:${x.nextOp}`));
     if (!b) return false;
-    remember(this.inspected, `${b.code}:${b.nextOp}`);
+    remember(this.finalChecked, `${b.code}:${b.nextOp}`);
     if (this.cfg.random() < this.cfg.failChance) {
       const defect = DEFECTS[Math.floor(this.cfg.random() * DEFECTS.length)];
       const r = await this.gate('Q-02', { action: 'qc_fail', bundleCode: b.code, defect });
@@ -343,7 +346,7 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
   // After a clear the bundle walks the route again, so the scans and looks
   // that belonged to the old round no longer count.
   private forget(code: string): void {
-    for (const set of [this.scanned, this.inspected]) {
+    for (const set of [this.scanned, this.inspected, this.finalChecked]) {
       for (const k of set) if (k.startsWith(`${code}:`)) set.delete(k);
     }
     this.defects.delete(code);

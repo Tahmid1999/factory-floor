@@ -39,7 +39,7 @@ describe('simulated line', () => {
     sim = new SimService(
       {
         ...simConfigFromEnv({ ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${port}` }),
-        random: mulberry32(7),
+        random: mulberry32(1),
         offlineChance: 0.12,
         offlineMs: [4_000, 12_000],
         flagChance: 0.3,
@@ -116,5 +116,56 @@ describe('simulated line', () => {
       });
     }
     expect(POLO_ROUTE).toEqual(bundles[0].style.route);
+  });
+});
+
+// Inline QC may look at a bundle that is already waiting for final QC. On the
+// live line that look used to count as the final check too, and the bundle
+// sat at qc_final for good.
+describe('final QC after inline QC', () => {
+  let api: INestApplication;
+  let prisma: PrismaClient;
+  let sim: SimService;
+  const clock = new FixedClock(new Date('2026-11-09T10:00:00Z'));
+  const qcFinal = POLO_ROUTE.indexOf('qc_final');
+
+  beforeAll(async () => {
+    await resetDb();
+    await purgeQueues();
+    api = await bootApi(clock);
+    await api.listen(0);
+    prisma = new PrismaClient();
+    const port = (api.getHttpServer().address() as AddressInfo).port;
+    sim = new SimService(
+      { ...simConfigFromEnv({ ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${port}` }), flagChance: 0, failChance: 0 },
+      clock,
+    );
+    const style = await prisma.style.findFirstOrThrow();
+    for (const code of ['B-9001', 'B-9002']) {
+      await prisma.bundle.create({
+        data: { code, styleId: style.id, pieces: 20, status: 'active', nextStep: qcFinal, isSimulated: true },
+      });
+    }
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+    await api.close();
+  });
+
+  it('still passes a bundle inline QC has looked at', async () => {
+    await sim.tick();
+    // Inline QC looks at both, then final QC works through what it has.
+    while (await sim['inspectInline']()) {}
+    while (await sim['finalCheck']()) {}
+    const after = await prisma.bundle.findMany({
+      where: { code: { in: ['B-9001', 'B-9002'] } },
+      select: { code: true, nextStep: true },
+      orderBy: { code: 'asc' },
+    });
+    expect(after).toEqual([
+      { code: 'B-9001', nextStep: qcFinal + 1 },
+      { code: 'B-9002', nextStep: qcFinal + 1 },
+    ]);
   });
 });
