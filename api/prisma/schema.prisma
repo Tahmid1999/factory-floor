@@ -112,6 +112,8 @@ model Bundle {
   updatedAt     DateTime     @updatedAt
   style         Style        @relation(fields: [styleId], references: [id])
   guest         Guest?       @relation(fields: [guestId], references: [id])
+
+  @@index([status, nextStep, createdAt, code])
 }
 
 model ScanInbox {
@@ -175,6 +177,7 @@ model Posting {
 
   @@index([period, kind, isSimulated])
   @@index([eventId])
+  @@index([bundleCode, kind])
 }
 
 model Roll {
@@ -223,6 +226,8 @@ model DeviceNotice {
   result      String
   createdAt   DateTime  @default(now())
   deliveredAt DateTime?
+
+  @@index([deviceId, deliveredAt])
 }
 
 model AuditLog {
