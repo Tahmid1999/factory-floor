@@ -6,8 +6,8 @@
 # hour on the VM. Run it inside tmux: a dropped ssh session takes the seed
 # with it, half done.
 #
-#   sh deploy/reseed.sh          prints what it would do, does nothing
-#   sh deploy/reseed.sh --yes    does it
+#   sh deploy/reseed.sh                              prints what it would do, does nothing
+#   git pull --ff-only && sh deploy/reseed.sh --yes  does it
 #
 # RESEED_ENV_FILE, RESEED_LOG and RESEED_NO_PULL=1 are for the local
 # rehearsal (a scratch env file, a log it can write, no pull); leave them
@@ -37,7 +37,11 @@ and audit row in it. With --yes it will:
   8. start api and worker, then docker image prune -f
 Nothing outside the factory-floor compose project is touched, apart from the
 prune of dangling images that deploy.sh does too.
-Run again with --yes to do it.
+
+To do it, inside tmux, from /srv/factory-floor:
+  git pull --ff-only && sh deploy/reseed.sh --yes
+Pull first: on the first run this script is not on the VM until the pull, and
+sh should not be reading a file the pull rewrites. Step 1's pull is then a no-op.
 EOF
     exit 0
     ;;
@@ -50,6 +54,18 @@ for name in $(grep -oE '^[A-Z][A-Z0-9_]*' deploy/env.prod.example); do
 done
 # Found out here rather than after the API is already down.
 touch "$log" || { echo "cannot write $log" >&2; exit 1; }
+# A seed-history left running by an earlier run (a dropped tmux or ssh
+# session, the container carrying on under Docker) would have the reset drop
+# the schema under it, and its writes would fail or land in the new one.
+left=$(docker ps -q --filter label=com.docker.compose.project=factory-floor --filter label=com.docker.compose.service=seed-history)
+if [ -n "$left" ]; then
+  cat >&2 <<EOF
+a seed-history from an earlier run is still running ($(echo $left)); nothing
+has been stopped or changed yet. Stop it, then run this again:
+  docker rm -f $(echo $left)
+EOF
+  exit 1
+fi
 
 step() { echo "$(date -u +%H:%M:%S) $*" | tee -a "$log"; }
 # Old scans for a database that is about to go, or the seed's own leftovers

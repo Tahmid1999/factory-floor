@@ -44,8 +44,17 @@ services:
       retries: 20
       start_period: 10s
 
+  # The node name is rabbit@<hostname> and its data lives under that name, so
+  # without a fixed hostname a recreated container is a new, empty node and
+  # the durable scan.apply queue is lost. Pinning it changes the config, so
+  # the first `up` after this went in recreates rabbitmq once as a new node
+  # (reseed.sh's first step, while the old api and worker still run). Both
+  # declare scan.apply again on reconnect (rabbit.ts open()), and a publish
+  # lost in that window leaves its inbox row unapplied, which the 30 s sweep
+  # sends again.
   rabbitmq:
     image: rabbitmq:3.13-alpine
+    hostname: factory-rabbitmq
     restart: unless-stopped
     mem_limit: 256m
     environment:
