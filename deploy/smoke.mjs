@@ -1,7 +1,8 @@
 // Usage: node deploy/smoke.mjs https://factory.tahmidalavi.com https://factory-api.tahmidalavi.com
 // One line per check; exit code 1 if any failed. Plain Node 22, no packages.
-// Makes one guest, three devices and a handful of scans, so it counts against
-// the per-network limits (5 new guests an hour) like any visitor.
+// Makes one guest, three devices, a handful of scans and one stress run, so it
+// counts against the per-network limits (5 new guests an hour, one stress run
+// a minute) like any visitor.
 const [web, api] = process.argv.slice(2, 4).map((u) => (u ?? '').replace(/\/$/, ''));
 if (![web, api].every((u) => /^https?:\/\//.test(u))) {
   console.error('usage: node smoke.mjs <web url> <api url>');
@@ -151,6 +152,32 @@ await check('/sim/work answers 404 from outside', async () => {
   const res = await fetch(`${api}/sim/work?station=S-07`, { headers, signal: AbortSignal.timeout(10_000) });
   expect(res.status === 404, `answered ${res.status}`);
   return process.env.SIM_KEY ? 'with the sim key' : 'without a key';
+});
+
+// The seeded month: the reseed closes October on its way to now.
+await check('/admin/pnl/periods lists 2026-10 as closed', async () => {
+  const list = await ok('/admin/pnl/periods');
+  const oct = Array.isArray(list) ? list.find((p) => p.period === '2026-10') : undefined;
+  expect(oct, `no 2026-10 in ${JSON.stringify(list)}`);
+  expect(oct.closed === true, '2026-10 is listed but not closed');
+  return list.map((p) => `${p.period}${p.closed ? ' closed' : ''}`).join(', ');
+});
+
+// One run only: the button allows one a minute per address and 20 an hour in
+// all, so a second smoke within a minute fails here and nowhere else.
+await check('a stress run ends with its test roll at 0 cm', async () => {
+  const { res, json, text } = await call('/admin/stock/stress', { method: 'POST' });
+  expect(res.status !== 429, `refused with 429 (${json?.error ?? text.slice(0, 80)}); wait a minute and run the smoke again`);
+  expect(res.ok, `POST /admin/stock/stress answered ${res.status}: ${text.slice(0, 120)}`);
+  expect(json.onHandCm === 0, `roll ${json.roll} has ${json.onHandCm} cm left`);
+  return `${json.roll}, ${json.accepted} taken, ${json.refused} refused, ${json.ms} ms`;
+});
+
+await check("/admin/payroll for today has the sim's workers", async () => {
+  const body = await ok('/admin/payroll');
+  const sims = (body.rows ?? []).filter((r) => r.kind === 'sim');
+  expect(sims.length > 0, `no sim rows for ${body.day} in ${body.rows?.length ?? 0}`);
+  return `${body.day}, ${sims.length} sim of ${body.rows.length}`;
 });
 
 // The station pages are served by Vercel with their own frame policy: the

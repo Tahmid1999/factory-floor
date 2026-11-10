@@ -151,6 +151,28 @@ services:
       DATABASE_URL: postgresql://ff_app:${FF_APP_PASSWORD:?run with --env-file .env}@postgres:5432/factory
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?run with --env-file .env}
 
+  # Slice 2's one-off, run by reseed.sh only: the api, worker and sim in one
+  # process on a fast clock, from 1 Oct to the moment it starts. SEED_MODE
+  # lifts the batch and gate limits, and the api and worker refuse to boot with
+  # it, so it is set here and nowhere else. It runs while the api (256) and
+  # worker (192) are stopped, so its 384 stays inside their share of the box.
+  seed-history:
+    image: factory-floor-api
+    profiles: ["reseed"]
+    command: ["node", "dist/seed-history.js"]
+    mem_limit: 384m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      NODE_OPTIONS: --max-old-space-size=${SEED_OLD_SPACE_MB:-300}
+      SEED_MODE: "1"
+      # The run drives the sim on its own clock (it sets this itself too).
+      SIM_ENABLED: "0"
+
 volumes:
   pgdata:
   rabbitdata:

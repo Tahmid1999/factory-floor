@@ -5,6 +5,7 @@ import * as http from 'node:http';
 import request from 'supertest';
 import { FixedClock } from '../src/clock';
 import { HoodService } from '../src/hood/hood';
+import { CloseService } from '../src/money/close.service';
 import type { HoodEvent } from '../src/hood/hood-event';
 import { bootApi, bootWorker, makeGuest, purgeQueues, resetDb, until } from './helpers';
 
@@ -115,6 +116,25 @@ describe('under the hood', () => {
     await g.batch('S-09', []).expect(429);
     await until(async () => (await recent()).some((e) => e.text === 'limit dev-S09 batch'));
     expect((await recent()).filter((e) => e.text === 'limit dev-S09 batch')).toHaveLength(1);
+  });
+
+  // The cron's path, which is how production closes; close.e2e checks the
+  // admin route's line in the buffer, not on the wire.
+  it('streams the month close once it has committed', async () => {
+    const stream = openStream(port);
+    let line: HoodEvent;
+    try {
+      expect(await api.get(CloseService).runOnce()).toMatchObject({ closed: true });
+      line = await until(async () => stream.lines().find((e) => e.kind === 'close'), 5000);
+    } finally {
+      // An open stream keeps api.close() in afterAll waiting forever.
+      stream.close();
+    }
+    expect(line.proc).toBe('api');
+    expect(line.text).toMatch(/^close 2026-10 · wip \$\d+\.\d\d · \d+ ms$/);
+    // A second run finds October closed and says nothing.
+    expect(await api.get(CloseService).runOnce()).toMatchObject({ closed: false });
+    expect((await recent()).filter((e) => e.kind === 'close')).toHaveLength(1);
   });
 
   it('keeps no guest name, cookie, ip or raw device id in the last 200 lines', async () => {
