@@ -14,7 +14,7 @@ import { CLOCK, Clock } from '../clock';
 import { deviceLabel, HoodService } from '../hood/hood';
 import { POLO_ROUTE, STYLE_CODE } from '../line/line';
 import { PERIOD_RE } from '../money/close';
-import { periodOf } from '../money/period';
+import { nextPeriod, periodOf } from '../money/period';
 import { payrollOf, scansOf } from '../money/payroll';
 import { pnlOf } from '../money/pnl';
 import { CloseService } from '../money/close.service';
@@ -89,14 +89,23 @@ export class AdminService {
     };
   }
 
+  // Every month from the first posting to now, empty ones too. The ends are
+  // one probe each on the period index; a GROUP BY read every posting ever
+  // made. The last can be a month ahead: a scan corrected a minute past
+  // midnight on the 1st.
   async periods() {
-    const [rows, closed] = await Promise.all([
-      this.prisma.posting.groupBy({ by: ['period'] }),
+    const [first, last, closed] = await Promise.all([
+      this.prisma.posting.findFirst({ orderBy: { period: 'asc' }, select: { period: true } }),
+      this.prisma.posting.findFirst({ orderBy: { period: 'desc' }, select: { period: true } }),
       this.prisma.periodClose.findMany({ select: { period: true } }),
     ]);
     const done = new Set(closed.map((c) => c.period));
-    const all = new Set([...rows.map((r) => r.period), periodOf(this.clock.now())]);
-    return [...all].sort().reverse().map((period) => ({ period, closed: done.has(period) }));
+    const now = periodOf(this.clock.now());
+    const from = [now, ...done, ...(first ? [first.period] : [])].sort()[0];
+    const to = last && last.period > now ? last.period : now;
+    const out: { period: string; closed: boolean }[] = [];
+    for (let p = from; p <= to; p = nextPeriod(p)) out.unshift({ period: p, closed: done.has(p) });
+    return out;
   }
 
   // One snapshot, so the lines, the close row and the WIP are of one moment.

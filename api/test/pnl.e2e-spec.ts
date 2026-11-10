@@ -184,6 +184,18 @@ describe('month p&l', () => {
     await get('/admin/pnl/postings?kind=toString').expect(400);
   });
 
+  it('lists the current month with no postings, and a month with none between two that have', async () => {
+    expect((await get('/admin/pnl/periods').expect(200)).body).toEqual([{ period: '2026-11', closed: false }]);
+    await book('revenue', 84_000, '2026-08-20T10:00:00Z', { now: new Date('2026-08-20T10:00:00Z') });
+    await book('revenue', 84_000, '2026-10-20T10:00:00Z', { now: new Date('2026-10-20T10:00:00Z') });
+    expect((await get('/admin/pnl/periods').expect(200)).body.map((p: { period: string }) => p.period)).toEqual([
+      '2026-11',
+      '2026-10',
+      '2026-09',
+      '2026-08',
+    ]);
+  });
+
   it('pages the postings newest first with their bundle, op and device', async () => {
     const style = await prisma.style.findUniqueOrThrow({ where: { code: '944' } });
     const b = await prisma.bundle.create({
