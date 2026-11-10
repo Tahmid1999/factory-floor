@@ -246,3 +246,6 @@ export function utcStamp(iso: string): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()].slice(0, 3)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
+
+// HH:MM:SS in UTC, for pages whose days and periods are UTC.
+export const utcTime = (ms: number): string => new Date(ms).toISOString().slice(11, 19);

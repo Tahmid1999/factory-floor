@@ -71,11 +71,18 @@ test('the menu follows the role: storekeeper has Stock, accounts has Payroll and
 // The stress endpoint allows one run a minute per address, so this is the only
 // test that presses the button.
 test('the stress button: 10 taken, 10 refused, roll empty', async ({ page }) => {
+  const warnings: string[] = [];
+  page.on('console', (m) => {
+    if (/same key|unique "key"/.test(m.text())) warnings.push(m.text());
+  });
   await page.goto('/admin/stock');
   await page.getByRole('button', { name: 'Try breaking it' }).click();
   await expect(page.getByTestId('stress-result')).toHaveText(
     /^20 issues at once on T-\d{4} · 10 taken · 10 refused · on hand 0\.0 m · \d+ ms$/,
   );
+  // The receive and the 10 accepted issues, all with the same kind and delta.
+  await expect(page.getByTestId('movements').locator('.ant-table-tbody tr.ant-table-row')).toHaveCount(11);
+  expect(warnings).toEqual([]);
 });
 
 test('p&l contribution is the sum of the lines shown', async ({ browser, page }) => {

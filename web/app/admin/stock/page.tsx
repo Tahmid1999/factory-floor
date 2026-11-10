@@ -2,7 +2,7 @@
 
 import { Button, InputNumber, Select, Table } from 'antd';
 import { useState } from 'react';
-import { StockMovement, StockRoll, StressResult, adminCall, hhmmss, usePoll } from '../../../lib/admin';
+import { StockMovement, StockRoll, StressResult, adminCall, usePoll, utcTime } from '../../../lib/admin';
 import { money } from '../../../lib/money';
 import { attrs } from '../attrs';
 import { useAdminSession } from '../session';
@@ -112,11 +112,12 @@ function Movements({ code }: { code: string }) {
           <Table<StockMovement>
             size="small"
             pagination={{ pageSize: 20, hideOnSinglePage: true, size: 'small' }}
-            rowKey={(m) => `${m.at}:${m.kind}:${m.bundleCode}:${m.deltaCm}`}
+            // No id in the reply and a stress run makes identical rows; the list is append-only, so the index is stable.
+            rowKey={(_, i) => String(i)}
             dataSource={rows}
             scroll={{ x: 'max-content' }}
             columns={[
-              { title: 'at', dataIndex: 'at', render: (t: number) => <span className="mono">{hhmmss(t)}</span> },
+              { title: 'at', dataIndex: 'at', render: (t: number) => <span className="mono">{utcTime(t)}</span> },
               { title: 'kind', dataIndex: 'kind' },
               {
                 title: 'cm',

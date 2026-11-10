@@ -2,7 +2,7 @@
 
 import { Drawer, Input, Table } from 'antd';
 import { useState } from 'react';
-import { PayrollRow, PayrollScan, hhmmss, todayUtc, usePoll } from '../../../lib/admin';
+import { PayrollRow, PayrollScan, todayUtc, usePoll, utcTime } from '../../../lib/admin';
 import { money } from '../../../lib/money';
 import { attrs } from '../attrs';
 import { useAs } from '../useAs';
@@ -78,7 +78,7 @@ function Scans({ day, workerKey }: { day: string; workerKey: string }) {
           dataSource={rows}
           locale={{ emptyText: 'no scans' }}
           columns={[
-            { title: 'at', dataIndex: 'at', render: (t: string) => <span className="mono">{hhmmss(Date.parse(t))}</span> },
+            { title: 'at', dataIndex: 'at', render: (t: string) => <span className="mono">{utcTime(Date.parse(t))}</span> },
             { title: 'bundle', dataIndex: 'bundleCode', render: (c: string) => <span className="mono">{c}</span> },
             { title: 'op', dataIndex: 'op' },
             { title: 'round', dataIndex: 'round', align: 'right', render: (n: number) => <span className="mono">{n}</span> },
