@@ -3,16 +3,15 @@ import { pnlLines } from '../src/money/pnl';
 import { runHistory } from '../src/seed-history';
 import { expectBundlesFollowRules, purgeQueues, resetDb } from './helpers';
 
-// Four hours across the end of October, so the close at 00:05 and S-09's
-// scripted outage both fall inside the run. Denser than the seed's 6 moves
-// every 5 min, so S-09 is sure to sew during its ten October minutes offline;
-// the close and the outage run the same code at any tick that divides 5 min.
+// Four hours across the end of October at the seed's own settings: 5 min
+// ticks of 5 moves, and the live pace from 23:00 to 01:00, so the close at
+// 00:05 and S-09's scripted outage both fall inside the run.
 const run = () =>
   runHistory({
     from: new Date('2026-10-31T22:00:00Z'),
     until: () => new Date('2026-11-01T02:00:00Z'),
-    tickMs: 30_000,
-    movesPerTick: 10,
+    tickMs: 300_000,
+    movesPerTick: 5,
     log: () => undefined,
   });
 
@@ -52,7 +51,8 @@ describe('seeded month', () => {
       SELECT p."kind"::text AS kind, e."correctedAt"
       FROM "Posting" p JOIN "BundleEvent" e ON e."id" = p."eventId"
       WHERE p."period" = '2026-11' AND p."adjustsPeriod" = '2026-10' AND e."deviceId" = ${s09.id}`;
-    expect(late.length).toBeGreaterThan(0);
+    // At the live pace S-09 sews about once a minute while it has work.
+    expect(late.length).toBeGreaterThanOrEqual(3);
     expect(summary.late).toBe(await prisma.posting.count({ where: { adjustsPeriod: '2026-10' } }));
     for (const p of late) expect(p.correctedAt.getTime()).toBeGreaterThanOrEqual(Date.parse('2026-10-31T23:50:00Z'));
 
@@ -63,7 +63,15 @@ describe('seeded month', () => {
     expect(await prisma.scanInbox.count({ where: { result: null } })).toBe(0);
     expect(summary.bundles).toBe(await prisma.bundle.count());
     expect(summary.postings).toBe(await prisma.posting.count());
-    expect(summary.ticks).toBe(480);
+    // 12 slow ticks either side of 240 at the live pace.
+    expect(summary.ticks).toBe(264);
+    expect(summary.pace).toBeCloseTo(0.05);
+    expect(summary.boundaryPace).toBe(1);
+    // The clock moves between moves, so a 5 min tick's events are not one instant.
+    const [{ n }] = await prisma.$queryRaw<{ n: number }[]>`
+      SELECT COUNT(DISTINCT "correctedAt")::int AS n FROM "BundleEvent"
+      WHERE "correctedAt" >= '2026-10-31T22:00:00Z' AND "correctedAt" < '2026-10-31T23:00:00Z'`;
+    expect(n).toBeGreaterThan(12);
     const bundles = await expectBundlesFollowRules(prisma);
     expect(bundles.length).toBeGreaterThan(20);
   }, 10 * 60_000);

@@ -23,13 +23,14 @@ import { WorkerModule } from './worker.module';
 const SEED_FROM = new Date('2026-10-01T00:00:00Z');
 // A move costs about 17 ms of wall time here (http, the transaction, the
 // worker's apply) and every tick waits ~20 ms for the worker to settle, so the
-// live pace (1 move every 3 s, 10 every 30 s) took 570 s a sim-day locally,
-// against a budget of 43 s (42 days in an hour on a VM half as fast). Even 1
-// move every 30 s took 112 s. 6 moves every 5 min fits at 38 s a sim-day:
-// October is seeded at about 6% of the live pace. The tick divides 5 min, so
-// 00:05 and the 23:50 to 00:20 outage fall on ticks.
+// live pace (10 moves every 30 s) took 570 s a sim-day locally, and even 1
+// move every 30 s took 112 s. The budget is 1 Oct to the deploy in 25 min
+// locally, about 35 s a sim-day. 5 moves every 5 min fits: October is seeded
+// at about 5% of the live pace, and at the live pace around the month end.
+// The tick divides 5 min, so 00:05 and the 23:50 to 00:20 outage fall on
+// ticks. SEED_TICK_MS and SEED_MOVES_PER_TICK override both.
 const SEED_TICK_MS = 300_000;
-const SEED_MOVES_PER_TICK = 6;
+const SEED_MOVES_PER_TICK = 5;
 const LIVE_MOVES_PER_MS = 1 / 3000;
 
 const MIN = 60_000;
@@ -41,6 +42,11 @@ const CLOSE_AT = 5 * MIN;
 const LATE_STATION = 'S-09';
 const LATE_BEFORE = 10 * MIN;
 const LATE_AFTER = 20 * MIN;
+// From 23:00 on the last day to 01:00 on the 1st the line runs at the live
+// pace, so the outage and the close happen with the line as busy as it is
+// live and S-09 has a queue worth sending late. 120 ticks a side.
+const BOUNDARY_SPAN = 60 * MIN;
+const LIVE_PACE = { tickMs: 30_000, movesPerTick: 10 };
 
 const SETTLE_POLL_MS = 5;
 const SETTLE_GIVE_UP_MS = 5000;
@@ -56,12 +62,13 @@ export type Summary = {
   // Per month the run touched, every posting in it, adjustments included.
   contribution: Record<string, number>;
   closes: { period: string; wipMills: number; ms: number }[];
-  // Postings booked after a close for work dated before it: S-09's outage.
-  // At 6 moves a tick S-09 gets about one move in its October minutes, so
-  // this is small, and 0 means the P&L has no late line to show.
+  // Postings booked after a close for work dated before it: S-09's outage,
+  // and the scans after it that waited held until S-09's landed.
   late: number;
-  // Moves per sim-hour against the live sim's; 1 is the same pace.
+  // Moves per sim-hour against the live sim's, away from the month ends; 1 is
+  // the same pace. Around a month end it is boundaryPace.
   pace: number;
+  boundaryPace: number;
   // Ticks after which the worker had not settled within 5 s.
   unsettled: number;
 };
@@ -96,8 +103,11 @@ export async function runHistory(o: {
   until: () => Date;
   tickMs: number;
   movesPerTick: number;
+  // The pace from 23:00 to 01:00 around each month end the run closes.
+  boundary?: { tickMs: number; movesPerTick: number };
   log?: (s: string) => void;
 }): Promise<Summary> {
+  const dense = o.boundary ?? LIVE_PACE;
   const log = o.log ?? ((s: string) => console.log(s));
   const check = new PrismaClient();
   try {
@@ -143,9 +153,11 @@ export async function runHistory(o: {
     );
 
     const pace = o.movesPerTick / o.tickMs / LIVE_MOVES_PER_MS;
+    const boundaryPace = dense.movesPerTick / dense.tickMs / LIVE_MOVES_PER_MS;
     log(
       `seed ${stamp(o.from)} to ${stamp(o.until())} UTC · tick ${o.tickMs} ms · ${o.movesPerTick} moves` +
-        (pace < 1 ? ` · seeded at about ${pct(pace)} of the live pace` : ''),
+        (pace < 1 ? ` · seeded at about ${pct(pace)} of the live pace` : '') +
+        ` · ${pct(boundaryPace)} from 23:00 to 01:00 at month ends`,
     );
 
     const first = periodOf(o.from);
@@ -176,12 +188,19 @@ export async function runHistory(o: {
         log(`${LATE_STATION} offline ${stamp(clock.now())} to ${stamp(new Date(end.getTime() + LATE_AFTER))}, scripted`);
       }
 
-      await sim.tick();
+      // A boundary is the end of this month, or the start of it when the run
+      // began before it. A slow tick never steps over the start of a window.
+      const near = t >= end.getTime() - BOUNDARY_SPAN || (start > o.from && t < start.getTime() + BOUNDARY_SPAN);
+      const len = near ? dense.tickMs : Math.min(o.tickMs, end.getTime() - BOUNDARY_SPAN - t);
+      const moves = near ? dense.movesPerTick : o.movesPerTick;
+      // Settled once a tick; the clock moves on between moves so the tick's
+      // scans are spread over it, not stamped at its first instant.
+      await sim.tick({ moves, afterMove: () => clock.advance(len / moves) });
       if (!(await settled(prisma))) {
         unsettled++;
-        log(`tick ${stamp(clock.now())}: worker not settled after ${SETTLE_GIVE_UP_MS} ms, going on`);
+        log(`tick ${stamp(new Date(t))}: worker not settled after ${SETTLE_GIVE_UP_MS} ms, going on`);
       }
-      clock.advance(o.tickMs);
+      clock.set(new Date(t + len));
       ticks++;
 
       if (clock.now().getTime() >= nextDay) {
@@ -197,7 +216,7 @@ export async function runHistory(o: {
     if (!(await settled(prisma))) unsettled++;
 
     const seconds = (performance.now() - started) / 1000;
-    const simDays = (ticks * o.tickMs) / DAY;
+    const simDays = (clock.now().getTime() - o.from.getTime()) / DAY;
     const contribution: Record<string, number> = {};
     for (let p = first; p <= periodOf(clock.now()); p = nextPeriod(p)) {
       contribution[p] = (await prisma.$transaction((tx) => pnlLines(tx, p, { excludeSim: false }))).contribution;
@@ -214,6 +233,7 @@ export async function runHistory(o: {
       closes,
       late: await prisma.posting.count({ where: { adjustsPeriod: { not: null } } }),
       pace,
+      boundaryPace,
       unsettled,
     };
     log(
@@ -234,7 +254,12 @@ export async function runHistory(o: {
 
 async function main() {
   config({ path: resolve(__dirname, '../../.env') });
-  await runHistory({ from: SEED_FROM, until: () => new Date(), tickMs: SEED_TICK_MS, movesPerTick: SEED_MOVES_PER_TICK });
+  await runHistory({
+    from: SEED_FROM,
+    until: () => new Date(),
+    tickMs: Number(process.env.SEED_TICK_MS) || SEED_TICK_MS,
+    movesPerTick: Number(process.env.SEED_MOVES_PER_TICK) || SEED_MOVES_PER_TICK,
+  });
 }
 
 if (require.main === module) {

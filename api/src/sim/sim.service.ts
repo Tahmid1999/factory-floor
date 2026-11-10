@@ -12,8 +12,8 @@ export type SimConfig = {
   baseUrl: string;
   key: string;
   tickMs: number;
-  // Moves made per tick. Live is 1 every 3 s; the seed run steps 5 min and
-  // makes 6, a slower pace that fits its time budget (seed-history.ts).
+  // Moves made per tick. Live is 1 every 3 s; the seed run passes its own
+  // (seed-history.ts).
   movesPerTick: number;
   random: () => number;
   // Per batch device per tick.
@@ -143,18 +143,22 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  // movesPerTick moves on the line. Ticks never overlap: a slow api makes the
-  // sim slow, not a pile of concurrent scans.
-  async tick(): Promise<void> {
+  // movesPerTick moves on the line, or as many as the caller asks. afterMove
+  // lets the seed run step its clock between moves, so one tick's scans are
+  // not all stamped with the same instant. Ticks never overlap: a slow api
+  // makes the sim slow, not a pile of concurrent scans.
+  async tick(o: { moves?: number; afterMove?: () => void } = {}): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     try {
       if (!(await this.register())) return;
       await this.flipOnline();
-      for (let m = 0; m < this.cfg.movesPerTick; m++) {
+      const moves = o.moves ?? this.cfg.movesPerTick;
+      for (let m = 0; m < moves; m++) {
         // A round where no station had work will not find any on a second
-        // pass at the same instant.
+        // pass this tick.
         if (!(await this.move())) break;
+        o.afterMove?.();
       }
     } catch (err) {
       this.log.warn(`tick failed: ${(err as Error).message}`);
