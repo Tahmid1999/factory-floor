@@ -210,6 +210,7 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
       } else if (now >= (this.offlineUntil.get(station) ?? 0)) {
         await dev.setOnline(true);
       }
+            lastSeq: r.body.lastSeq,
     }
   }
 

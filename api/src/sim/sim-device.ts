@@ -17,8 +17,10 @@ export class SimDevice {
   resyncsHandled = 0;
 
   private queue: QueuedEvent[] = [];
-  // Seqs start at 1 per process, like a phone's first day.
-  private seq = 0;
+  // Seqs go on from the last one the server holds for this device, as the
+  // station page does: a restarted worker, or the live sim after the seeded
+  // month, would otherwise reuse seqs and have every scan answered duplicate.
+  private seq: number;
   private flushing: Promise<void> | null = null;
 
   readonly deviceId: string;
@@ -27,7 +29,8 @@ export class SimDevice {
   private readonly clock: Clock;
   private readonly onResync?: (r: Resync) => void;
 
-  constructor(o: { deviceId: string; station: string; send: Send; clock: Clock; onResync?: (r: Resync) => void }) {
+  constructor(o: { deviceId: string; station: string; send: Send; clock: Clock; lastSeq?: number; onResync?: (r: Resync) => void }) {
+    this.seq = o.lastSeq ?? 0;
     this.deviceId = o.deviceId;
     this.station = o.station;
     this.send = o.send;

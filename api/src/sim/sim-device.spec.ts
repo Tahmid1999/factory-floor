@@ -49,6 +49,14 @@ describe('SimDevice', () => {
     expect(dev.pending).toBe(0);
   });
 
+  it('numbers its scans on from the last seq the server holds', async () => {
+    const { calls, send } = fakeSend();
+    const dev = make(send, { lastSeq: 41 });
+    await dev.scan('B-8492', 'sew_collar');
+    await dev.scan('B-8493', 'sew_collar');
+    expect(calls.flatMap((c) => c.body.events.map((e) => e.seq))).toEqual([42, 43]);
+  });
+
   it('sends right after a scan while online', async () => {
     const { calls, send } = fakeSend();
     const dev = make(send);
