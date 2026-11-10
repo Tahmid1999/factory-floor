@@ -31,6 +31,15 @@ enum PostingKind {
   writeoff
   revenue
   adjustment
+  trims
+}
+
+enum MovementKind {
+  receive
+  issue_to_cutting
+  return
+  scrap
+  adjust
 }
 
 model Style {
@@ -38,6 +47,7 @@ model Style {
   code            String      @unique
   name            String
   piecesPerBundle Int
+  fobMills        Int         @default(0)
   route           String[]
   bundles         Bundle[]
   rates           PieceRate[]
@@ -151,13 +161,51 @@ model Posting {
   period        String
   kind          PostingKind
   amountMills   Int
-  bundleCode    String
+  // Null for a stock adjustment, which belongs to a roll, not a bundle.
+  bundleCode    String?
   eventId       String?
   guestId       String?
   guestPurged   Boolean     @default(false)
   adjustsPeriod String?
   isSimulated   Boolean     @default(false)
   createdAt     DateTime    @default(now())
+
+  @@index([period, kind, isSimulated])
+}
+
+model Roll {
+  id                String          @id @default(cuid())
+  code              String          @unique
+  lengthCm          Int
+  costPerMetreMills Int
+  receivedAt        DateTime
+  isTest            Boolean         @default(false)
+  isSimulated       Boolean
+  movements         StockMovement[]
+}
+
+model StockMovement {
+  id          String       @id @default(cuid())
+  rollId      String
+  kind        MovementKind
+  deltaCm     Int
+  bundleCode  String?
+  actor       String
+  reason      String?
+  isSimulated Boolean
+  at          DateTime
+  roll        Roll         @relation(fields: [rollId], references: [id])
+
+  @@index([rollId])
+}
+
+model PeriodClose {
+  period        String   @id
+  closedAt      DateTime
+  closedBy      String
+  wipMills      Int
+  wipGuestMills Int
+  totals        Json
 }
 
 model DeviceNotice {

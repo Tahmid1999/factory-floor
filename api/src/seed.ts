@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import {
+  FOB_MILLS,
   OPERATIONS,
   PIECES_PER_BUNDLE,
   POLO_ROUTE,
@@ -13,8 +14,8 @@ import {
 export async function seedLine(prisma: PrismaClient): Promise<void> {
   const style = await prisma.style.upsert({
     where: { code: STYLE_CODE },
-    update: { name: STYLE_NAME, piecesPerBundle: PIECES_PER_BUNDLE, route: POLO_ROUTE },
-    create: { code: STYLE_CODE, name: STYLE_NAME, piecesPerBundle: PIECES_PER_BUNDLE, route: POLO_ROUTE },
+    update: { name: STYLE_NAME, piecesPerBundle: PIECES_PER_BUNDLE, fobMills: FOB_MILLS, route: POLO_ROUTE },
+    create: { code: STYLE_CODE, name: STYLE_NAME, piecesPerBundle: PIECES_PER_BUNDLE, fobMills: FOB_MILLS, route: POLO_ROUTE },
   });
 
   for (const op of OPERATIONS) {

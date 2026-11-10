@@ -7,6 +7,8 @@ export const POLO_ROUTE = ['cut', 'sew_collar', 'sew_sleeve', 'side_seam', 'hem'
 export const STYLE_CODE = '944';
 export const STYLE_NAME = 'polo';
 export const PIECES_PER_BUNDLE = 20;
+// Free-on-board price per piece; a bundle of 20 books 84,000 mills of revenue.
+export const FOB_MILLS = 4200;
 
 // Gate ops block the bundle until the server answers; the rest queue offline.
 // qc_flag, clear_rework and scrap are gate actions that are not route steps.

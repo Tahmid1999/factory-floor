@@ -5,6 +5,7 @@ import { CLOCK, Clock } from '../clock';
 import { hit } from '../limits';
 import { STATIONS, StationCode, STYLE_CODE } from '../line/line';
 import { rateAt } from '../line/rates';
+import { post } from '../money/postings';
 import { wasteOfMany } from '../apply/waste';
 import { PrismaService } from '../prisma.service';
 
@@ -100,7 +101,6 @@ export class GuestsService {
     const rates = await tx.pieceRate.findMany({ where: { styleId: style.id } });
     const cutRate = rateAt(rates, style.id, 'cut', o.now);
     const afterCut = style.route.indexOf('sew_collar');
-    const period = o.now.toISOString().slice(0, 7);
 
     const seq = await tx.$queryRaw<{ n: bigint }[]>`
       SELECT nextval('bundle_code_seq') AS n FROM generate_series(1, ${o.count}::int)`;
@@ -131,17 +131,14 @@ export class GuestsService {
           createdAt: o.now,
         },
       });
-      await tx.posting.create({
-        data: {
-          period,
-          kind: 'labour',
-          amountMills: cutRate * style.piecesPerBundle,
-          bundleCode: bundle.code,
-          eventId: event.id,
-          guestId: o.guestId,
-          isSimulated: o.cutter.isSimulated,
-          createdAt: o.now,
-        },
+      await post(tx, o.now, {
+        kind: 'labour',
+        amountMills: cutRate * style.piecesPerBundle,
+        at: o.now,
+        bundleCode: bundle.code,
+        eventId: event.id,
+        guestId: o.guestId,
+        isSimulated: o.cutter.isSimulated,
       });
       cut.push({ bundle, event });
     }

@@ -1,5 +1,6 @@
 import { Bundle, BundleEvent, BundleStatus, EventSource, PieceRate, Prisma, ScanInbox } from '@prisma/client';
 import type { HoodEvent } from '../hood/hood-event';
+import { post } from '../money/postings';
 import { labourMills, rateAt } from '../line/rates';
 import { Decision, decide } from '../line/state-machine';
 
@@ -84,19 +85,16 @@ export async function applyStep(w: Work, s: Step): Promise<BundleEvent> {
     const rate = rateAt(w.rates, bundle.styleId, s.op, s.correctedAt);
     const amountMills = labourMills(rate, bundle.pieces, await alreadyPaid(tx, bundle.code, s.op));
     if (amountMills > 0) {
-      await tx.posting.create({
-        data: {
-          period: s.correctedAt.toISOString().slice(0, 7),
-          kind: 'labour',
-          amountMills,
-          bundleCode: bundle.code,
-          eventId: event.id,
-          guestId: bundle.guestId,
-          // Follows whoever did the work, so "exclude simulated" in the
-          // P&L leaves exactly the visitor's own scans.
-          isSimulated,
-          createdAt: w.now,
-        },
+      await post(tx, w.now, {
+        kind: 'labour',
+        amountMills,
+        at: s.correctedAt,
+        bundleCode: bundle.code,
+        eventId: event.id,
+        guestId: bundle.guestId,
+        // Follows whoever did the work, so "exclude simulated" in the
+        // P&L leaves exactly the visitor's own scans.
+        isSimulated,
       });
     }
   }
