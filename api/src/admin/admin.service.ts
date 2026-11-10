@@ -7,13 +7,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { performance } from 'node:perf_hooks';
-import { PieceRate, Prisma } from '@prisma/client';
+import { PieceRate, PostingKind, Prisma } from '@prisma/client';
 import { wasteOf, wasteOfMany } from '../apply/waste';
 import { audit } from '../audit/audit';
 import { CLOCK, Clock } from '../clock';
 import { deviceLabel, HoodService } from '../hood/hood';
 import { POLO_ROUTE, STYLE_CODE } from '../line/line';
 import { PERIOD_RE } from '../money/close';
+import { periodOf } from '../money/period';
+import { payrollOf, scansOf } from '../money/payroll';
+import { pnlOf } from '../money/pnl';
 import { CloseService } from '../money/close.service';
 import { PrismaService } from '../prisma.service';
 import { deleteGuestData, lockBundles, orphanPostings } from '../purge/guest-data';
@@ -26,6 +29,7 @@ const MAX_RATE_MILLS = 1_000_000;
 // A bound on a typo, far above any one roll.
 const MAX_ADJUST_CM = 1_000_000;
 const STOCK_ROWS = 100;
+const POSTING_ROWS = 100;
 // The stress run: 20 issues of 10 m at once on a 100 m test roll.
 const STRESS_ISSUES = 20;
 const STRESS_CM = 1000;
@@ -83,6 +87,87 @@ export class AdminService {
       visitors,
       tail: this.hood.tail(['batch', 'gate', 'apply'], 10),
     };
+  }
+
+  async periods() {
+    const [rows, closed] = await Promise.all([
+      this.prisma.posting.findMany({ distinct: ['period'], select: { period: true }, orderBy: { period: 'desc' } }),
+      this.prisma.periodClose.findMany({ select: { period: true } }),
+    ]);
+    const done = new Set(closed.map((c) => c.period));
+    const all = new Set([...rows.map((r) => r.period), periodOf(this.clock.now())]);
+    return [...all].sort().reverse().map((period) => ({ period, closed: done.has(period) }));
+  }
+
+  // One snapshot, so the lines, the close row and the WIP are of one moment.
+  pnl(period: string | undefined, excludeSim: boolean) {
+    const now = this.clock.now();
+    const p = period ?? periodOf(now);
+    if (!PERIOD_RE.test(p)) throw new BadRequestException({ error: 'period must be YYYY-MM' });
+    return this.prisma.$transaction((tx) => pnlOf(tx, p, { excludeSim, now }), { isolationLevel: 'RepeatableRead' });
+  }
+
+  // Keyset on (createdAt, id), the order the rows are shown in, so a page
+  // boundary stays put while the sim keeps posting at the top.
+  async postings(q: { period?: string; kind?: string; late?: string; excludeSim: boolean; after?: string }) {
+    if (q.period !== undefined && !PERIOD_RE.test(q.period)) throw new BadRequestException({ error: 'period must be YYYY-MM' });
+    if (q.kind !== undefined && !(q.kind in PostingKind)) throw new BadRequestException({ error: 'unknown kind' });
+    const where: Prisma.PostingWhereInput[] = [];
+    if (q.period) where.push({ period: q.period });
+    if (q.kind) where.push({ kind: q.kind as PostingKind });
+    if (q.late === '1') where.push({ adjustsPeriod: { not: null } });
+    if (q.late === '0') where.push({ adjustsPeriod: null });
+    if (q.excludeSim) where.push({ isSimulated: false });
+    if (q.after) {
+      const at = await this.prisma.posting.findUnique({ where: { id: q.after } });
+      if (!at) throw new BadRequestException({ error: 'no such row to page from' });
+      where.push({ OR: [{ createdAt: { lt: at.createdAt } }, { createdAt: at.createdAt, id: { lt: at.id } }] });
+    }
+    const page = await this.prisma.posting.findMany({
+      where: { AND: where },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: POSTING_ROWS + 1,
+    });
+    const rows = page.slice(0, POSTING_ROWS);
+    const events = await this.prisma.bundleEvent.findMany({
+      where: { id: { in: rows.flatMap((r) => (r.eventId ? [r.eventId] : [])) } },
+      select: { id: true, op: true, deviceId: true },
+    });
+    const devices = await this.prisma.device.findMany({
+      where: { id: { in: events.flatMap((e) => (e.deviceId ? [e.deviceId] : [])) } },
+    });
+    const evOf = new Map(events.map((e) => [e.id, e]));
+    const devOf = new Map(devices.map((d) => [d.id, d]));
+    return {
+      rows: rows.map((r) => {
+        const e = r.eventId ? evOf.get(r.eventId) : undefined;
+        const d = e?.deviceId ? devOf.get(e.deviceId) : undefined;
+        return {
+          id: r.id,
+          at: r.createdAt.toISOString(),
+          kind: r.kind,
+          amountMills: r.amountMills,
+          period: r.period,
+          adjustsPeriod: r.adjustsPeriod,
+          bundleCode: r.bundleCode,
+          op: e?.op ?? null,
+          device: d ? deviceLabel(d) : null,
+          isSimulated: r.isSimulated,
+        };
+      }),
+      next: page.length > POSTING_ROWS ? rows[rows.length - 1].id : null,
+    };
+  }
+
+  async payroll(day: string | undefined) {
+    const d = day ?? this.clock.now().toISOString().slice(0, 10);
+    return { day: d, rows: await this.prisma.$transaction((tx) => payrollOf(tx, d), { isolationLevel: 'RepeatableRead' }) };
+  }
+
+  async scans(day: string | undefined, worker: string | undefined) {
+    if (!day) throw new BadRequestException({ error: 'day required' });
+    if (!worker) throw new BadRequestException({ error: 'worker required' });
+    return { day, rows: await this.prisma.$transaction((tx) => scansOf(tx, day, worker)) };
   }
 
   async bundles(q?: string) {

@@ -44,7 +44,7 @@ export class CloseService {
 
   // Off in tests, where a fixed clock and a wall-clock schedule would close
   // some spec's month at random.
-  @Cron('5 * * * *', { name: 'close' })
+  @Cron('5 * * * *', { name: 'close', timeZone: 'UTC' })
   async tick() {
     if (process.env.CLOSE_ENABLED === '0') return;
     try {

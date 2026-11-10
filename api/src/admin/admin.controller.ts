@@ -49,6 +49,48 @@ export class AdminController {
     return this.admin.audit(str(action));
   }
 
+  @Get('pnl/periods')
+  @Reads('pnl')
+  periods() {
+    return this.admin.periods();
+  }
+
+  @Get('pnl/postings')
+  @Reads('pnl')
+  postings(
+    @Query('period') period?: unknown,
+    @Query('kind') kind?: unknown,
+    @Query('late') late?: unknown,
+    @Query('excludeSim') excludeSim?: unknown,
+    @Query('after') after?: unknown,
+  ) {
+    return this.admin.postings({
+      period: str(period),
+      kind: str(kind),
+      late: str(late),
+      excludeSim: excludeSim === '1',
+      after: str(after),
+    });
+  }
+
+  @Get('pnl')
+  @Reads('pnl')
+  pnl(@Query('period') period?: unknown, @Query('excludeSim') excludeSim?: unknown) {
+    return this.admin.pnl(str(period), excludeSim === '1');
+  }
+
+  @Get('payroll/scans')
+  @Reads('payroll')
+  scans(@Query('day') day?: unknown, @Query('worker') worker?: unknown) {
+    return this.admin.scans(str(day), str(worker));
+  }
+
+  @Get('payroll')
+  @Reads('payroll')
+  payroll(@Query('day') day?: unknown) {
+    return this.admin.payroll(str(day));
+  }
+
   @Get('stock')
   @Reads('stock')
   stock() {

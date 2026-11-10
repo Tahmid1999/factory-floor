@@ -1,5 +1,6 @@
-import { Prisma } from '@prisma/client';
+import { PeriodClose, Prisma } from '@prisma/client';
 import type { Tx } from '../apply/steps';
+import { periodBounds } from './period';
 
 export type PnlLines = {
   revenue: number;
@@ -54,4 +55,47 @@ export async function pnlLines(tx: Tx, period: string, o: { excludeSim: boolean 
   }
   lines.late = [...late].map(([from, mills]) => ({ from, mills }));
   return lines;
+}
+
+// What the line held at the instant the month ended: bundles cut before it and
+// neither shipped nor scrapped before it, valued at what had been spent on them
+// by then. A memo line: those costs are already in the month's P&L as incurred.
+// One statement: the seeded month ends with tens of thousands of bundles.
+export async function wipAt(tx: Tx, end: Date): Promise<{ all: number; guest: number }> {
+  const [r] = await tx.$queryRaw<{ wip: bigint; guest: bigint }[]>`
+    WITH wip AS (
+      SELECT c."bundleId"
+      FROM "BundleEvent" c
+      WHERE c."op" = 'cut' AND c."correctedAt" < ${end}
+        AND NOT EXISTS (
+          SELECT 1 FROM "BundleEvent" d
+          WHERE d."bundleId" = c."bundleId" AND d."op" IN ('ship', 'scrap') AND d."correctedAt" < ${end}
+        )
+    )
+    SELECT COALESCE(SUM(p."amountMills"), 0)::bigint AS wip,
+           COALESCE(SUM(p."amountMills") FILTER (WHERE NOT b."isSimulated"), 0)::bigint AS guest
+    FROM wip w
+    JOIN "Bundle" b ON b."id" = w."bundleId"
+    JOIN "BundleEvent" e ON e."bundleId" = w."bundleId" AND e."correctedAt" < ${end}
+    JOIN "Posting" p ON p."eventId" = e."id" AND p."kind" IN ('fabric', 'labour', 'trims')`;
+  return { all: Number(r.wip), guest: Number(r.guest) };
+}
+
+export type Pnl = PnlLines & {
+  period: string;
+  closed: PeriodClose | null;
+  wip: { mills: number; asOf: string };
+};
+
+// pnlLines plus what the month closed as and the line's WIP. A closed month
+// reads WIP from its snapshot, as of its end; an open one is valued as of now.
+export async function pnlOf(tx: Tx, period: string, o: { excludeSim: boolean; now: Date }): Promise<Pnl> {
+  const closed = await tx.periodClose.findUnique({ where: { period } });
+  const lines = await pnlLines(tx, period, { excludeSim: o.excludeSim });
+  if (closed) {
+    const mills = o.excludeSim ? closed.wipGuestMills : closed.wipMills;
+    return { period, closed, ...lines, wip: { mills, asOf: periodBounds(period).end.toISOString() } };
+  }
+  const live = await wipAt(tx, o.now);
+  return { period, closed, ...lines, wip: { mills: o.excludeSim ? live.guest : live.all, asOf: o.now.toISOString() } };
 }

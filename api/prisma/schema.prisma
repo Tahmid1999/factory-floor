@@ -154,6 +154,8 @@ model BundleEvent {
   wasted      Boolean     @default(false)
   isSimulated Boolean     @default(false)
   createdAt   DateTime    @default(now())
+
+  @@index([bundleId])
 }
 
 model Posting {
@@ -171,6 +173,7 @@ model Posting {
   createdAt     DateTime    @default(now())
 
   @@index([period, kind, isSimulated])
+  @@index([eventId])
 }
 
 model Roll {
