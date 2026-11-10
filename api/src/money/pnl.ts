@@ -81,6 +81,25 @@ export async function wipAt(tx: Tx, end: Date): Promise<{ all: number; guest: nu
   return { all: Number(r.wip), guest: Number(r.guest) };
 }
 
+// WIP as of now, driven from the bundles still on the line instead of the
+// whole event history: status is set to shipped/scrapped by the same
+// transactions that write those events. Same result as wipAt(tx, now).
+export async function wipLive(tx: Tx, now: Date): Promise<{ all: number; guest: number }> {
+  const [r] = await tx.$queryRaw<{ wip: bigint; guest: bigint }[]>`
+    SELECT COALESCE(SUM(p."amountMills"), 0)::bigint AS wip,
+           COALESCE(SUM(p."amountMills") FILTER (WHERE NOT b."isSimulated"), 0)::bigint AS guest
+    FROM "Bundle" b
+    JOIN "BundleEvent" e ON e."bundleId" = b."id" AND e."correctedAt" < ${now}
+    JOIN "Posting" p ON p."eventId" = e."id" AND p."kind" IN ('fabric', 'labour', 'trims')
+    WHERE b."status" IN ('active', 'rework', 'packed')
+      AND EXISTS (SELECT 1 FROM "BundleEvent" c WHERE c."bundleId" = b."id" AND c."op" = 'cut' AND c."correctedAt" < ${now})
+      AND NOT EXISTS (
+        SELECT 1 FROM "BundleEvent" d
+        WHERE d."bundleId" = b."id" AND d."op" IN ('ship', 'scrap') AND d."correctedAt" < ${now}
+      )`;
+  return { all: Number(r.wip), guest: Number(r.guest) };
+}
+
 export type Pnl = PnlLines & {
   period: string;
   closed: PeriodClose | null;
@@ -96,6 +115,6 @@ export async function pnlOf(tx: Tx, period: string, o: { excludeSim: boolean; no
     const mills = o.excludeSim ? closed.wipGuestMills : closed.wipMills;
     return { period, closed, ...lines, wip: { mills, asOf: periodBounds(period).end.toISOString() } };
   }
-  const live = await wipAt(tx, o.now);
+  const live = await wipLive(tx, o.now);
   return { period, closed, ...lines, wip: { mills: o.excludeSim ? live.guest : live.all, asOf: o.now.toISOString() } };
 }

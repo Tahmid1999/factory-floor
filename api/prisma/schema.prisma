@@ -156,6 +156,7 @@ model BundleEvent {
   createdAt   DateTime    @default(now())
 
   @@index([bundleId])
+  @@index([correctedAt])
 }
 
 model Posting {

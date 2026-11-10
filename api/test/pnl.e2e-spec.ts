@@ -3,7 +3,7 @@ import { PostingKind, PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { FixedClock } from '../src/clock';
 import { closeMonth } from '../src/money/close';
-import { pnlOf } from '../src/money/pnl';
+import { pnlOf, wipAt } from '../src/money/pnl';
 import { post } from '../src/money/postings';
 import { bootApi, resetDb } from './helpers';
 
@@ -119,6 +119,48 @@ describe('month p&l', () => {
     expect(p.wip).toEqual({ mills: 0, asOf: '2026-11-01T00:00:00.000Z' });
   });
 
+  it('reads the all-rows wip and the guest-only wip from different snapshot columns', async () => {
+    await mixed();
+    await prisma.periodClose.update({ where: { period: '2026-10' }, data: { wipMills: 700, wipGuestMills: 300 } });
+    const all = (await get('/admin/pnl?period=2026-10').expect(200)).body;
+    const guest = (await get('/admin/pnl?period=2026-10&excludeSim=1').expect(200)).body;
+    expect(all.wip.mills).toBe(700);
+    expect(guest.wip.mills).toBe(300);
+  });
+
+  it('live wip equals wipAt at now, for all rows and guest only', async () => {
+    const style = await prisma.style.findUniqueOrThrow({ where: { code: '944' } });
+    const day = (h: number) => new Date(Date.UTC(2026, 10, 10, h));
+    // status is what the apply and gate paths leave behind for these events.
+    const fixture = async (code: string, sim: boolean, status: 'active' | 'shipped' | 'scrapped', ops: string[]) => {
+      const b = await prisma.bundle.create({
+        data: { code, styleId: style.id, pieces: 20, status, isSimulated: sim },
+      });
+      for (const [i, op] of ops.entries()) {
+        const ev = await prisma.bundleEvent.create({
+          data: { bundleId: b.id, op, source: 'gate', round: 0, correctedAt: day(8 + i), isSimulated: sim },
+        });
+        for (const [k, m] of [['labour', 200], ['fabric', 61_200], ['trims', 290]] as const) {
+          await book(k, m + i, day(8 + i).toISOString(), { sim, bundleCode: code, eventId: ev.id });
+        }
+      }
+    };
+    for (const sim of [true, false]) {
+      const t = sim ? 'S' : 'G';
+      await fixture(`B-${t}1`, sim, 'active', ['cut', 'hem']);
+      await fixture(`B-${t}2`, sim, 'shipped', ['cut', 'hem', 'ship']);
+      await fixture(`B-${t}3`, sim, 'scrapped', ['cut', 'scrap']);
+    }
+    await prisma.bundle.create({ data: { code: 'B-uncut', styleId: style.id, pieces: 20, status: 'active', isSimulated: true } });
+    const ref = await prisma.$transaction((tx) => wipAt(tx, NOW));
+    expect(ref.all).toBeGreaterThan(ref.guest);
+    expect(ref.guest).toBeGreaterThan(0);
+    const all = (await get('/admin/pnl?period=2026-11').expect(200)).body;
+    const guest = (await get('/admin/pnl?period=2026-11&excludeSim=1').expect(200)).body;
+    expect(all.wip.mills).toBe(ref.all);
+    expect(guest.wip.mills).toBe(ref.guest);
+  });
+
   it('an open month shows live wip as of the clock', async () => {
     const live = (await get('/admin/pnl').expect(200)).body;
     expect(live.period).toBe('2026-11');
@@ -138,6 +180,8 @@ describe('month p&l', () => {
     ]);
     await get('/admin/pnl?period=2026-13').expect(400);
     await get('/admin/pnl?period=Nov').expect(400);
+    await get('/admin/pnl/postings?kind=constructor').expect(400);
+    await get('/admin/pnl/postings?kind=toString').expect(400);
   });
 
   it('pages the postings newest first with their bundle, op and device', async () => {

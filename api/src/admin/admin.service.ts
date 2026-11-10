@@ -91,7 +91,7 @@ export class AdminService {
 
   async periods() {
     const [rows, closed] = await Promise.all([
-      this.prisma.posting.findMany({ distinct: ['period'], select: { period: true }, orderBy: { period: 'desc' } }),
+      this.prisma.posting.groupBy({ by: ['period'] }),
       this.prisma.periodClose.findMany({ select: { period: true } }),
     ]);
     const done = new Set(closed.map((c) => c.period));
@@ -111,7 +111,7 @@ export class AdminService {
   // boundary stays put while the sim keeps posting at the top.
   async postings(q: { period?: string; kind?: string; late?: string; excludeSim: boolean; after?: string }) {
     if (q.period !== undefined && !PERIOD_RE.test(q.period)) throw new BadRequestException({ error: 'period must be YYYY-MM' });
-    if (q.kind !== undefined && !(q.kind in PostingKind)) throw new BadRequestException({ error: 'unknown kind' });
+    if (q.kind !== undefined && !(Object.values(PostingKind) as string[]).includes(q.kind)) throw new BadRequestException({ error: 'unknown kind' });
     const where: Prisma.PostingWhereInput[] = [];
     if (q.period) where.push({ period: q.period });
     if (q.kind) where.push({ kind: q.kind as PostingKind });
