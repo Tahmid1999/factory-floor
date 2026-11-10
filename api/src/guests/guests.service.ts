@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { ForbiddenException, HttpException, Inject, Injectable } from '@nestjs/common';
 import { Bundle, BundleEvent, Device, Guest, GuestMode, Prisma } from '@prisma/client';
 import { CLOCK, Clock } from '../clock';
-import { allow } from '../limits';
+import { hit } from '../limits';
 import { STATIONS, StationCode, STYLE_CODE } from '../line/line';
 import { rateAt } from '../line/rates';
 import { post } from '../money/postings';
@@ -65,7 +65,7 @@ export class GuestsService {
   async createGuest(ip: string): Promise<Guest> {
     const ipHash = hashIp(ip);
     const now = this.clock.now();
-    if (!allow(`newguest:${ipHash}`, 5, 3600, now.getTime())) {
+    if (!hit(`newguest:${ipHash}`, 5, 3600, now.getTime())) {
       throw new HttpException({ error: 'too many new guests from this network, try in an hour' }, 429);
     }
     // The name is a short random number, so a clash with a live guest is

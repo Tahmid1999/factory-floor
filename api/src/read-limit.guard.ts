@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, HttpException, Inject, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { CLOCK, Clock } from './clock';
-import { allow } from './limits';
+import { hit } from './limits';
 
 // Reads anyone can make without a login: the admin views, a guest's /me and
 // the window on the line. Each costs a few queries or an open stream, so one
@@ -17,7 +17,7 @@ export class ReadLimitGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
     const req = ctx.switchToHttp().getRequest<Request>();
     const key = `read:${ctx.getClass().name}:${req.ip ?? ''}`;
-    if (!allow(key, READS_PER_MINUTE, 60, this.clock.now().getTime())) {
+    if (!hit(key, READS_PER_MINUTE, 60, this.clock.now().getTime())) {
       throw new HttpException({ error: 'too many reads, slow down' }, 429);
     }
     return true;

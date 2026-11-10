@@ -24,9 +24,11 @@ export function hit(key: string, max: number, windowSec: number, now: number): b
   return true;
 }
 
-// The request limits a client can run into. A seed run (SEED_MODE=1) steps
-// a sim-hour of scans through in a few wall seconds from one address, so
-// there they would only throttle the sim; the run is the only caller.
+// The per-device batch and gate limits, the two the sim runs into. A seed
+// run (SEED_MODE=1) sends a sim-hour of scans in a few wall seconds, so
+// there they would only throttle it; the api and worker refuse to boot with
+// SEED_MODE=1, so the run is the only process where this is off. Every other
+// limit stays on.
 export function allow(key: string, max: number, windowSec: number, now: number): boolean {
   return process.env.SEED_MODE === '1' || hit(key, max, windowSec, now);
 }

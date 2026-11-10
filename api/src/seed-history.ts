@@ -27,8 +27,9 @@ const SEED_FROM = new Date('2026-10-01T00:00:00Z');
 // move every 30 s took 112 s. The budget is 1 Oct to the deploy in 25 min
 // locally, about 35 s a sim-day. 5 moves every 5 min fits: October is seeded
 // at about 5% of the live pace, and at the live pace around the month end.
-// The tick divides 5 min, so 00:05 and the 23:50 to 00:20 outage fall on
-// ticks. SEED_TICK_MS and SEED_MOVES_PER_TICK override both.
+// Around a month end the ticks are 30 s and a steady tick is cut short at the
+// window's start, so 00:05 and the 23:50 to 00:20 outage fall on ticks
+// whatever the steady tick is. SEED_TICK_MS and SEED_MOVES_PER_TICK override.
 const SEED_TICK_MS = 300_000;
 const SEED_MOVES_PER_TICK = 5;
 const LIVE_MOVES_PER_MS = 1 / 3000;
@@ -50,6 +51,7 @@ const LIVE_PACE = { tickMs: 30_000, movesPerTick: 10 };
 
 const SETTLE_POLL_MS = 5;
 const SETTLE_GIVE_UP_MS = 5000;
+const CLOSE_SETTLE_MS = 60_000;
 
 export type Summary = {
   ticks: number;
@@ -73,10 +75,21 @@ export type Summary = {
   unsettled: number;
 };
 
+// The run seeds the line itself, dated at its start, so any stock, money or
+// bundle already there would be out of order with it.
 async function refusal(prisma: PrismaClient): Promise<string | null> {
-  if (process.env.SEED_MODE !== '1') return 'SEED_MODE=1 is not set; it turns the request limits off for this process';
-  const n = await prisma.bundle.count();
-  if (n > 0) return `the Bundle table is not empty (${n}); the seed runs once, on an emptied database`;
+  if (process.env.SEED_MODE !== '1') return 'SEED_MODE=1 is not set; it turns the batch and gate limits off for this process';
+  const counts: [string, () => Promise<number>][] = [
+    ['Bundle', () => prisma.bundle.count()],
+    ['Roll', () => prisma.roll.count()],
+    ['StockMovement', () => prisma.stockMovement.count()],
+    ['Posting', () => prisma.posting.count()],
+    ['PeriodClose', () => prisma.periodClose.count()],
+  ];
+  for (const [table, count] of counts) {
+    const n = await count();
+    if (n > 0) return `the ${table} table is not empty (${n}); the seed runs once, on an emptied database`;
+  }
   return null;
 }
 
@@ -84,13 +97,30 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // The worker applies after the api has replied, so the next tick waits for
 // every inbox row to have a result. Held rows have one ('held').
-async function settled(prisma: PrismaService): Promise<boolean> {
-  const end = Date.now() + SETTLE_GIVE_UP_MS;
+async function settled(prisma: PrismaClient, giveUpMs = SETTLE_GIVE_UP_MS): Promise<boolean> {
+  const end = Date.now() + giveUpMs;
   for (;;) {
     if (!(await prisma.scanInbox.findFirst({ where: { result: null }, select: { id: true } }))) return true;
     if (Date.now() > end) return false;
     await sleep(SETTLE_POLL_MS);
   }
+}
+
+// A close snapshots the month, and a scan still on its way to the worker
+// would land after it as a late scan that never was. So the close waits for
+// the worker however long it takes, up to a minute, and stops the run if not.
+export async function closeWhenSettled(
+  prisma: PrismaClient,
+  closer: CloseService,
+  period: string,
+  waitMs = CLOSE_SETTLE_MS,
+): Promise<{ wipMills: number; ms: number }> {
+  if (!(await settled(prisma, waitMs))) {
+    throw new Error(`not closing ${period}: the worker has scans it has not settled after ${waitMs} ms`);
+  }
+  const t0 = performance.now();
+  const out = await closer.close(period, 'seed');
+  return { wipMills: out.close.wipMills, ms: Math.round(performance.now() - t0) };
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -134,8 +164,10 @@ export async function runHistory(o: {
     worker = await NestFactory.createApplicationContext(WorkerModule, { logger: ['error', 'warn'] });
     // The hourly purge would fire on the wall clock against a clock that is
     // weeks behind it. Nothing is old enough to go, but it would lock bundles
-    // mid-tick for nothing. The 30 s sweep stays: it only republishes rows
-    // unapplied for 30 s of this clock, which a settled tick never leaves.
+    // mid-tick for nothing. The 30 s sweep stays: the clock moves up to a
+    // minute between moves, so a row the worker has not reached yet can look
+    // 30 s old and go out twice, which apply skips, as it does live; and it
+    // picks up any row an unsettled tick left behind.
     api.get(SchedulerRegistry).deleteCronJob('close');
     worker.get(SchedulerRegistry).deleteCronJob('purge');
 
@@ -174,11 +206,9 @@ export async function runHistory(o: {
       const { start, end } = periodBounds(month);
       const prev = periodOf(new Date(start.getTime() - 1));
       if (prev >= first && !closes.some((c) => c.period === prev) && t >= start.getTime() + CLOSE_AT) {
-        const t0 = performance.now();
-        const out = await closer.close(prev, 'seed');
-        const ms = Math.round(performance.now() - t0);
-        closes.push({ period: prev, wipMills: out.close.wipMills, ms });
-        log(`close ${prev} · wip ${dollars(out.close.wipMills)} · ${ms} ms`);
+        const c = await closeWhenSettled(prisma, closer, prev);
+        closes.push({ period: prev, ...c });
+        log(`close ${prev} · wip ${dollars(c.wipMills)} · ${c.ms} ms`);
       }
       // Scripted, not drawn, and the README says so: the late scans from the
       // month before that the P&L shows are this outage.
@@ -191,14 +221,19 @@ export async function runHistory(o: {
       // A boundary is the end of this month, or the start of it when the run
       // began before it. A slow tick never steps over the start of a window.
       const near = t >= end.getTime() - BOUNDARY_SPAN || (start > o.from && t < start.getTime() + BOUNDARY_SPAN);
-      const len = near ? dense.tickMs : Math.min(o.tickMs, end.getTime() - BOUNDARY_SPAN - t);
+      // The last tick stops at until, never past it: the live sim takes over
+      // from there on the wall clock.
+      const len = Math.min(
+        near ? dense.tickMs : Math.min(o.tickMs, end.getTime() - BOUNDARY_SPAN - t),
+        o.until().getTime() - t,
+      );
       const moves = near ? dense.movesPerTick : o.movesPerTick;
       // Settled once a tick; the clock moves on between moves so the tick's
       // scans are spread over it, not stamped at its first instant.
       await sim.tick({ moves, afterMove: () => clock.advance(len / moves) });
       if (!(await settled(prisma))) {
         unsettled++;
-        log(`tick ${stamp(new Date(t))}: worker not settled after ${SETTLE_GIVE_UP_MS} ms, going on`);
+        log(`tick ${stamp(new Date(t))}: worker not settled after ${SETTLE_GIVE_UP_MS} ms, going on; the run will exit 1`);
       }
       clock.set(new Date(t + len));
       ticks++;
@@ -254,12 +289,15 @@ export async function runHistory(o: {
 
 async function main() {
   config({ path: resolve(__dirname, '../../.env') });
-  await runHistory({
+  const s = await runHistory({
     from: SEED_FROM,
     until: () => new Date(),
     tickMs: Number(process.env.SEED_TICK_MS) || SEED_TICK_MS,
     movesPerTick: Number(process.env.SEED_MOVES_PER_TICK) || SEED_MOVES_PER_TICK,
   });
+  // The data may well be fine (the sweep resends), but a deploy should not
+  // go on without someone looking.
+  if (s.unsettled > 0) throw new Error(`${s.unsettled} ticks did not settle within ${SETTLE_GIVE_UP_MS} ms`);
 }
 
 if (require.main === module) {
