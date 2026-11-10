@@ -12,6 +12,8 @@
     "migrate:test": "dotenv run -f ../.env -- node scripts/migrate.js test",
     "seed": "ts-node src/seed-cli.ts",
     "seed:prod": "node dist/seed-cli.js",
+    "seed:history": "ts-node src/seed-history.ts",
+    "seed:history:prod": "node dist/seed-history.js",
     "test": "jest --config jest.config.json",
     "test:e2e": "jest --config test/jest-e2e.json --runInBand",
     "postinstall": "prisma generate"

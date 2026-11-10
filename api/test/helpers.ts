@@ -6,6 +6,7 @@ import request from 'supertest';
 import { PrismaClient } from '@prisma/client';
 import { AppModule } from '../src/app.module';
 import { CLOCK, Clock, FixedClock } from '../src/clock';
+import { decide } from '../src/line/state-machine';
 import { APPLY_QUEUE } from '../src/rabbit';
 import { seedLine } from '../src/seed';
 import { receive } from '../src/stock/stock';
@@ -128,4 +129,48 @@ export async function until<T>(check: () => Promise<T | undefined | false>, ms =
     if (Date.now() > end) throw new Error('timed out waiting');
     await new Promise((r) => setTimeout(r, 50));
   }
+}
+
+// Replays every simulated bundle's events through the state machine: each op
+// must have been one the rules allowed at that point, and the bundle must end
+// where its events put it. Returns the bundles for further checks.
+export async function expectBundlesFollowRules(prisma: PrismaClient) {
+  const bundles = await prisma.bundle.findMany({ where: { isSimulated: true }, include: { style: true } });
+  for (const b of bundles) {
+    const events = await prisma.bundleEvent.findMany({ where: { bundleId: b.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+    expect(events.every((e) => e.isSimulated)).toBe(true);
+    const state = { status: 'active' as string, nextStep: 0, route: b.style.route, reworkRound: 0 };
+    const done: { op: string; round: number }[] = [];
+    for (const e of events) {
+      if (e.op === 'qc_flag' || e.op === 'qc_fail') {
+        state.status = 'rework';
+      } else if (e.op === 'clear_rework') {
+        // The event does not store where it went; the gate reply does.
+        state.status = 'active';
+        state.nextStep = b.style.route.indexOf((e.gateReply as { nextOp: string }).nextOp);
+        state.reworkRound += 1;
+      } else if (e.op === 'scrap') {
+        state.status = 'scrapped';
+      } else {
+        const d = decide(state as never, e.op, done);
+        expect({ bundle: b.code, op: e.op, round: e.round, decision: d.kind }).toEqual({
+          bundle: b.code,
+          op: e.op,
+          round: state.reworkRound,
+          decision: 'apply',
+        });
+        done.push({ op: e.op, round: state.reworkRound });
+        state.nextStep += 1;
+        if (e.op === 'pack') state.status = 'packed';
+        if (e.op === 'ship') state.status = 'shipped';
+      }
+    }
+    expect({ code: b.code, status: state.status, nextStep: state.nextStep, round: state.reworkRound }).toEqual({
+      code: b.code,
+      status: b.status,
+      nextStep: b.nextStep,
+      round: b.reworkRound,
+    });
+  }
+  return bundles;
 }

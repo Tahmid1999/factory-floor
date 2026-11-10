@@ -1,4 +1,4 @@
-import { hit, stressRefusal, windowCount } from './limits';
+import { allow, hit, stressRefusal, windowCount } from './limits';
 
 describe('hit', () => {
   it('allows 5 in a window and refuses the 6th', () => {
@@ -45,5 +45,26 @@ describe('stressRefusal', () => {
     for (let i = 0; i < 20; i++) expect(stressRefusal(`198.51.100.${i}`, t + i)).toBeNull();
     expect(stressRefusal('198.51.100.200', t + 100)).toEqual(expect.any(String));
     expect(stressRefusal('198.51.100.201', t + 3_600_000)).toBeNull();
+  });
+});
+
+describe('allow', () => {
+  afterEach(() => {
+    delete process.env.SEED_MODE;
+  });
+
+  it('is the same fixed window as hit', () => {
+    const t = 7_000_000;
+    expect(allow('k-e', 2, 1, t)).toBe(true);
+    expect(allow('k-e', 2, 1, t)).toBe(true);
+    expect(allow('k-e', 2, 1, t)).toBe(false);
+  });
+
+  it('lets everything through in a seed run, and leaves hit alone', () => {
+    process.env.SEED_MODE = '1';
+    const t = 8_000_000;
+    for (let i = 0; i < 100; i++) expect(allow('k-f', 2, 1, t)).toBe(true);
+    expect(hit('k-g', 1, 60, t)).toBe(true);
+    expect(hit('k-g', 1, 60, t)).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ describe('SimService when the api cannot be reached', () => {
         baseUrl: 'http://127.0.0.1:1',
         key: 'k',
         tickMs: 1000,
+        movesPerTick: 1,
         random: () => 0.5,
         offlineChance: 0,
         offlineMs: [1, 1],

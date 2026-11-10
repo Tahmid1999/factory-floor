@@ -8,6 +8,19 @@ export class SystemClock implements Clock {
   }
 }
 
+// The seed run boots the api and the worker in one process on one stepped
+// clock. The testing module's override is not in the production image, so
+// the run hands its clock over here before either module is created.
+let shared: Clock | undefined;
+
+export function shareClock(c: Clock | undefined): void {
+  shared = c;
+}
+
+export function processClock(): Clock {
+  return shared ?? new SystemClock();
+}
+
 // Tests move time by hand so windows and sweeps are deterministic.
 export class FixedClock implements Clock {
   constructor(private current: Date = new Date()) {}

@@ -4,10 +4,9 @@ import { PrismaClient } from '@prisma/client';
 import { AddressInfo } from 'node:net';
 import { FixedClock } from '../src/clock';
 import { POLO_ROUTE } from '../src/line/line';
-import { decide } from '../src/line/state-machine';
 import { SimService, simConfigFromEnv } from '../src/sim/sim.service';
 import request from 'supertest';
-import { bootApi, bootWorker, emptyStock, purgeQueues, resetDb, until } from './helpers';
+import { bootApi, bootWorker, emptyStock, expectBundlesFollowRules, purgeQueues, resetDb, until } from './helpers';
 
 // A small seeded generator, so a failing run can be run again.
 function mulberry32(seed: number) {
@@ -78,44 +77,8 @@ describe('simulated line', () => {
     expect(sim.stats.clears).toBeGreaterThanOrEqual(1);
     expect(cleared).toBe(sim.stats.clears);
 
-    const bundles = await prisma.bundle.findMany({ where: { isSimulated: true }, include: { style: true } });
+    const bundles = await expectBundlesFollowRules(prisma);
     expect(bundles.length).toBeGreaterThan(10);
-    for (const b of bundles) {
-      const events = await prisma.bundleEvent.findMany({ where: { bundleId: b.id }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
-      expect(events.every((e) => e.isSimulated)).toBe(true);
-      const state = { status: 'active' as string, nextStep: 0, route: b.style.route, reworkRound: 0 };
-      const done: { op: string; round: number }[] = [];
-      for (const e of events) {
-        if (e.op === 'qc_flag' || e.op === 'qc_fail') {
-          state.status = 'rework';
-        } else if (e.op === 'clear_rework') {
-          // The event does not store where it went; the gate reply does.
-          state.status = 'active';
-          state.nextStep = b.style.route.indexOf((e.gateReply as { nextOp: string }).nextOp);
-          state.reworkRound += 1;
-        } else if (e.op === 'scrap') {
-          state.status = 'scrapped';
-        } else {
-          const d = decide(state as never, e.op, done);
-          expect({ bundle: b.code, op: e.op, round: e.round, decision: d.kind }).toEqual({
-            bundle: b.code,
-            op: e.op,
-            round: state.reworkRound,
-            decision: 'apply',
-          });
-          done.push({ op: e.op, round: state.reworkRound });
-          state.nextStep += 1;
-          if (e.op === 'pack') state.status = 'packed';
-          if (e.op === 'ship') state.status = 'shipped';
-        }
-      }
-      expect({ code: b.code, status: state.status, nextStep: state.nextStep, round: state.reworkRound }).toEqual({
-        code: b.code,
-        status: b.status,
-        nextStep: b.nextStep,
-        round: b.reworkRound,
-      });
-    }
     expect(POLO_ROUTE).toEqual(bundles[0].style.route);
   });
 });

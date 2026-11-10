@@ -12,7 +12,7 @@ import {
 import { CLOCK, Clock } from '../clock';
 import { GuestGuard, GuestRequest } from '../guests/guests.guard';
 import { HoodService } from '../hood/hood';
-import { hit } from '../limits';
+import { allow } from '../limits';
 import { OPERATIONS } from '../line/line';
 import { BatchBody, BatchEvent, IngestService } from './ingest.service';
 
@@ -67,7 +67,7 @@ export class IngestController {
     if (body.events.length > MAX_EVENTS) throw new PayloadTooLargeException({ error: 'at most 50 events per batch' });
     // Ownership first, so a stranger cannot spend another device's allowance.
     const device = await this.ingest.deviceFor(req.actor, body.deviceId);
-    if (!hit(`batch:${device.id}`, 2, 1, this.clock.now().getTime())) {
+    if (!allow(`batch:${device.id}`, 2, 1, this.clock.now().getTime())) {
       this.hood.emitLimit(device, 'batch');
       throw new HttpException({ error: 'too many batches, slow down' }, 429);
     }

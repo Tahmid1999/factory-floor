@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { CLOCK, SystemClock } from './clock';
+import { CLOCK, processClock } from './clock';
 import { PrismaService } from './prisma.service';
 import { Rabbit } from './rabbit';
 
@@ -7,7 +7,7 @@ import { Rabbit } from './rabbit';
 // module in the API, so a test that overrides CLOCK moves time everywhere at once.
 @Global()
 @Module({
-  providers: [PrismaService, Rabbit, { provide: CLOCK, useClass: SystemClock }],
+  providers: [PrismaService, Rabbit, { provide: CLOCK, useFactory: processClock }],
   exports: [PrismaService, Rabbit, CLOCK],
 })
 export class CoreModule {}

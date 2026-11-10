@@ -14,7 +14,7 @@ import { CLOCK, Clock } from '../clock';
 import { GuestGuard, GuestRequest } from '../guests/guests.guard';
 import { IngestService } from '../ingest/ingest.service';
 import { HoodService } from '../hood/hood';
-import { hit } from '../limits';
+import { allow } from '../limits';
 import { DEFECTS, Defect, GATE_ACTIONS, GateAction, GateBody, GateService, stationRefusal } from './gate.service';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,7 +68,7 @@ export class GateController {
     const body = parseGate(raw);
     // Ownership first, so a stranger cannot spend another device's allowance.
     const device = await this.ingest.deviceFor(req.actor, body.deviceId);
-    if (!hit(`gate:${device.id}`, 5, 1, this.clock.now().getTime())) {
+    if (!allow(`gate:${device.id}`, 5, 1, this.clock.now().getTime())) {
       this.hood.emitLimit(device, 'gate');
       throw new HttpException({ error: 'too many gate calls, slow down' }, 429);
     }

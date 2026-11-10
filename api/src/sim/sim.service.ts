@@ -12,6 +12,9 @@ export type SimConfig = {
   baseUrl: string;
   key: string;
   tickMs: number;
+  // Moves made per tick. Live is 1 every 3 s; the seed run steps 5 min and
+  // makes 6, a slower pace that fits its time budget (seed-history.ts).
+  movesPerTick: number;
   random: () => number;
   // Per batch device per tick.
   offlineChance: number;
@@ -28,6 +31,7 @@ export function simConfigFromEnv(env: NodeJS.ProcessEnv): SimConfig {
     baseUrl: env.API_INTERNAL_URL ?? `http://127.0.0.1:${env.PORT ?? 4120}`,
     key: env.SIM_KEY ?? '',
     tickMs: Number(env.SIM_TICK_MS) || 3000,
+    movesPerTick: 1,
     random: Math.random,
     offlineChance: 0.02,
     offlineMs: [20_000, 60_000],
@@ -107,6 +111,7 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
   private readonly http: ReturnType<typeof httpTo>;
   private readonly gateIds = new Map<string, string>();
   private readonly offlineUntil = new Map<string, number>();
+  private readonly forced = new Map<string, number>();
   private timer?: NodeJS.Timeout;
   private busy = false;
   private cursor: number | null = null;
@@ -138,29 +143,47 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
     if (this.timer) clearInterval(this.timer);
   }
 
-  // One move on the line. Ticks never overlap: a slow api makes the sim slow,
-  // not a pile of concurrent scans.
+  // movesPerTick moves on the line. Ticks never overlap: a slow api makes the
+  // sim slow, not a pile of concurrent scans.
   async tick(): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     try {
       if (!(await this.register())) return;
       await this.flipOnline();
-      const n = ROUND_ROBIN.length;
-      const start = this.cursor ?? Math.floor(this.cfg.random() * n);
-      for (let i = 0; i < n; i++) {
-        const at = (start + i) % n;
-        if (await this.act(ROUND_ROBIN[at])) {
-          this.cursor = (at + 1) % n;
-          return;
-        }
+      for (let m = 0; m < this.cfg.movesPerTick; m++) {
+        // A round where no station had work will not find any on a second
+        // pass at the same instant.
+        if (!(await this.move())) break;
       }
-      this.cursor = (start + 1) % n;
     } catch (err) {
       this.log.warn(`tick failed: ${(err as Error).message}`);
     } finally {
       this.busy = false;
     }
+  }
+
+  private async move(): Promise<boolean> {
+    const n = ROUND_ROBIN.length;
+    const start = this.cursor ?? Math.floor(this.cfg.random() * n);
+    for (let i = 0; i < n; i++) {
+      const at = (start + i) % n;
+      if (await this.act(ROUND_ROBIN[at])) {
+        this.cursor = (at + 1) % n;
+        return true;
+      }
+    }
+    this.cursor = (start + 1) % n;
+    return false;
+  }
+
+  // Scripted, not drawn: the seed run takes one station off the network until
+  // untilMs. Its phone keeps scanning into its queue with the real scannedAt
+  // and sends nothing, the same as a drawn outage, so a run across a month end
+  // produces late scans from the month before on purpose.
+  forceOffline(station: string, untilMs: number): void {
+    this.forced.set(station, untilMs);
+    this.offlineUntil.set(station, Math.max(this.offlineUntil.get(station) ?? 0, untilMs));
   }
 
   // Idempotent on the api side, so a restart gets the same devices back. A
@@ -187,6 +210,7 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
             station: o.station,
             send: this.http.send,
             clock: this.clock,
+            lastSeq: r.body.lastSeq,
             onResync: (x) => this.onResync(x),
           }),
         );
@@ -201,6 +225,10 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
     const now = this.clock.now().getTime();
     const [lo, hi] = this.cfg.offlineMs;
     for (const [station, dev] of this.batch) {
+      if (now < (this.forced.get(station) ?? 0)) {
+        dev.online = false;
+        continue;
+      }
       if (dev.online) {
         if (this.cfg.random() < this.cfg.offlineChance) {
           dev.online = false;
@@ -210,7 +238,6 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
       } else if (now >= (this.offlineUntil.get(station) ?? 0)) {
         await dev.setOnline(true);
       }
-            lastSeq: r.body.lastSeq,
     }
   }
 

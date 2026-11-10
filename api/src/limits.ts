@@ -24,6 +24,13 @@ export function hit(key: string, max: number, windowSec: number, now: number): b
   return true;
 }
 
+// The request limits a client can run into. A seed run (SEED_MODE=1) steps
+// a sim-hour of scans through in a few wall seconds from one address, so
+// there they would only throttle the sim; the run is the only caller.
+export function allow(key: string, max: number, windowSec: number, now: number): boolean {
+  return process.env.SEED_MODE === '1' || hit(key, max, windowSec, now);
+}
+
 // Gives back a slot taken by hit(), for limits that count failures only: the
 // caller takes the slot before any await so parallel tries cannot all pass the
 // check, then refunds it when the try turns out to be fine.
