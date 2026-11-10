@@ -175,3 +175,74 @@ export function rate(mills: number): string {
   if (mills === 0) return '-';
   return `$${Math.floor(mills / 1000)}.${String(mills % 1000).padStart(3, '0')}`;
 }
+
+export type StockRoll = {
+  code: string;
+  lengthCm: number;
+  onHandCm: number;
+  costPerMetreMills: number;
+  receivedAt: number;
+  isSimulated: boolean;
+};
+export type StockMovement = {
+  kind: string;
+  deltaCm: number;
+  bundleCode: string | null;
+  actor: string;
+  reason: string | null;
+  isSimulated: boolean;
+  at: number;
+};
+export type StressResult = { roll: string; accepted: number; refused: number; onHandCm: number; ms: number };
+
+export type PayrollRow = {
+  key: string;
+  worker: string;
+  kind: 'sim' | 'guest' | 'purged';
+  pieces: number;
+  paidPieces: number;
+  earningsMills: number;
+};
+export type PayrollScan = { at: string; bundleCode: string; op: string; round: number; pieces: number; mills: number };
+
+export type PeriodRow = { period: string; closed: boolean };
+export type PeriodClose = { period: string; closedAt: string; closedBy: string };
+export type Pnl = {
+  period: string;
+  closed: PeriodClose | null;
+  revenue: number;
+  fabric: number;
+  trims: number;
+  labour: number;
+  adjustment: number;
+  late: { from: string; mills: number }[];
+  contribution: number;
+  writeoff: number;
+  wip: { mills: number; asOf: string };
+};
+export type PostingRow = {
+  id: string;
+  at: string;
+  kind: string;
+  amountMills: number;
+  period: string;
+  adjustsPeriod: string | null;
+  bundleCode: string | null;
+  op: string | null;
+  device: string | null;
+  isSimulated: boolean;
+};
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+// '2026-10' -> 'October'
+export const monthName = (period: string): string => MONTHS[Number(period.slice(5, 7)) - 1] ?? period;
+
+export const todayUtc = (): string => new Date().toISOString().slice(0, 10);
+export const thisPeriod = (): string => todayUtc().slice(0, 7);
+
+// '2026-11-01T00:05:00.000Z' -> '1 Nov 00:05', in UTC like the periods.
+export function utcStamp(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()].slice(0, 3)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}

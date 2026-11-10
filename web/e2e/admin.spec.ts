@@ -38,14 +38,87 @@ test('view as accounts hides Held, and a direct visit shows the 403 text', async
   await expect(page.getByTestId('view-error')).toHaveText('accounts cannot see held');
 });
 
-test('slice 2 views are greyed, not links', async ({ page }) => {
+test('stock, payroll and month p&l are pages, and nothing says slice 2', async ({ page }) => {
   await page.goto('/admin');
   const nav = page.getByRole('navigation');
-  for (const name of ['Payroll', 'Month P&L', 'Stock']) {
-    await expect(nav.getByText(name)).toBeVisible();
-    await expect(nav.getByRole('link', { name })).toHaveCount(0);
-  }
-  await expect(nav.getByText('slice 2')).toHaveCount(3);
+  for (const name of ['Payroll', 'Month P&L', 'Stock']) await expect(nav.getByRole('link', { name })).toBeVisible();
+  await expect(nav.getByText('slice 2')).toHaveCount(0);
+
+  await nav.getByRole('link', { name: 'Stock' }).click();
+  await expect(page.locator('[data-row]').first()).toBeVisible();
+  await nav.getByRole('link', { name: 'Payroll' }).click();
+  await expect(page.getByLabel('day')).toBeVisible();
+  await nav.getByRole('link', { name: 'Month P&L' }).click();
+  await expect(page.locator('[data-row="contribution"]')).toBeVisible();
+});
+
+test('the menu follows the role: storekeeper has Stock, accounts has Payroll and Month P&L', async ({ page }) => {
+  const nav = page.getByRole('navigation');
+  await page.goto('/admin/stock?as=storekeeper');
+  await expect(nav.getByRole('link', { name: 'Stock' })).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Month P&L' })).toHaveCount(0);
+  await expect(nav.getByRole('link', { name: 'Payroll' })).toHaveCount(0);
+
+  await page.goto('/admin/pnl?as=accounts');
+  await expect(nav.getByRole('link', { name: 'Payroll' })).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Month P&L' })).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Stock' })).toHaveCount(0);
+
+  await page.goto('/admin/stock?as=accounts');
+  await expect(page.getByTestId('view-error')).toHaveText('accounts cannot see stock');
+});
+
+// The stress endpoint allows one run a minute per address, so this is the only
+// test that presses the button.
+test('the stress button: 10 taken, 10 refused, roll empty', async ({ page }) => {
+  await page.goto('/admin/stock');
+  await page.getByRole('button', { name: 'Try breaking it' }).click();
+  await expect(page.getByTestId('stress-result')).toHaveText(
+    /^20 issues at once on T-\d{4} · 10 taken · 10 refused · on hand 0\.0 m · \d+ ms$/,
+  );
+});
+
+test('p&l contribution is the sum of the lines shown', async ({ browser, page }) => {
+  await closeGuests();
+  const guest = await guestPage(browser);
+  await expect(scanButton(guest)).toBeEnabled();
+  await scanButton(guest).click();
+  await expect(flash(guest)).toContainText(/sew_collar/);
+
+  await page.goto('/admin/pnl');
+  const mills = async (name: string) => Number(await page.locator(`[data-row="${name}"] [data-mills]`).getAttribute('data-mills'));
+  // The scan's labour posting arrives through the worker, so wait for it.
+  await expect.poll(() => mills('labour'), { timeout: 20_000 }).toBeLessThan(0);
+  const lines = await page.locator('[data-line] [data-mills]').evaluateAll((els) => els.map((e) => Number(e.getAttribute('data-mills'))));
+  expect(lines.length).toBeGreaterThanOrEqual(5);
+  expect(await mills('contribution')).toBe(lines.reduce((a, b) => a + b, 0));
+  await expect(page.locator('[data-row="contribution"] [data-mills]')).toHaveText(/^-\$\d+\.\d\d$/);
+  await closeGuests();
+});
+
+test('the close button needs a login, a past month and no close yet', async ({ page }) => {
+  const cors = { 'access-control-allow-origin': 'http://localhost:3140', 'access-control-allow-credentials': 'true' };
+  const json = (body: unknown) => ({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(body) });
+  const pnl = (closed: unknown) => ({
+    period: '2020-10', closed, revenue: 0, fabric: 0, trims: 0, labour: 0, adjustment: 0, late: [], contribution: 0, writeoff: 0,
+    wip: { mills: 0, asOf: '2020-11-01T00:00:00.000Z' },
+  });
+  let closed: unknown = null;
+  await page.route('**/admin/pnl/periods', (r) => r.fulfill(json([{ period: '2020-10', closed: closed !== null }])));
+  await page.route('**/admin/pnl?**', (r) => r.fulfill(json(pnl(closed))));
+
+  await page.goto('/admin/pnl');
+  await expect(page.locator('[data-row="contribution"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Close / })).toHaveCount(0);
+
+  await page.route('**/admin/session', (r) => r.fulfill(json({ login: 'tahmid', role: 'admin' })));
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Close October' })).toBeVisible();
+
+  closed = { period: '2020-10', closedAt: '2020-11-01T00:05:00.000Z', closedBy: 'seed' };
+  await page.reload();
+  await expect(page.getByTestId('closed-note')).toHaveText('closed 1 Nov 00:05 · by seed');
+  await expect(page.getByRole('button', { name: /^Close / })).toHaveCount(0);
 });
 
 test('a guest trap run shows in the bundle timeline with wasted', async ({ browser, page }) => {

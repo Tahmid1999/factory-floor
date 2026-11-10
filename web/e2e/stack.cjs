@@ -13,6 +13,8 @@ const env = {
   SIM_ENABLED: process.env.STACK_SIM === '1' ? '1' : '0',
   WEB_ORIGIN: 'http://localhost:3140',
   PORT: '4120',
+  // The hourly close cron would otherwise fire on the wall clock mid-run.
+  CLOSE_ENABLED: '0',
   ...require('./admin-env.cjs'),
 };
 

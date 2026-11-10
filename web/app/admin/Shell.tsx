@@ -12,9 +12,11 @@ const LIVE: { view: View; label: string; path: string }[] = [
   { view: 'bundles', label: 'Bundles', path: '/admin/bundles' },
   { view: 'held', label: 'Held', path: '/admin/held' },
   { view: 'stations', label: 'Stations', path: '/admin/stations' },
+  { view: 'payroll', label: 'Payroll', path: '/admin/payroll' },
+  { view: 'pnl', label: 'Month P&L', path: '/admin/pnl' },
+  { view: 'stock', label: 'Stock', path: '/admin/stock' },
   { view: 'audit', label: 'Audit', path: '/admin/audit' },
 ];
-const LATER = ['Payroll', 'Month P&L', 'Stock'];
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const { as, href } = useAs();
@@ -29,15 +31,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
     ...LIVE.filter((i) => READS[role].includes(i.view)).map((i) => ({
       key: i.path,
       label: <Link href={href(i.path)}>{i.label}</Link>,
-    })),
-    ...LATER.map((name) => ({
-      key: name,
-      disabled: true,
-      label: (
-        <>
-          {name} <span className="mono">slice 2</span>
-        </>
-      ),
     })),
   ];
 

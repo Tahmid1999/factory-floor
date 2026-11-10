@@ -142,3 +142,8 @@
     white-space: nowrap;
   }
 }
+
+/* the grey rule that sets the P&L memo lines apart from the sum */
+.adm-main .memo-first > td {
+  border-top: 2px solid #bbb;
+}
