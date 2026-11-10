@@ -289,6 +289,44 @@ describe('stock ledger', () => {
     expect(await counts()).toEqual(before);
   });
 
+  it('marks a roll emptied by its last cut, skips it, and clears the mark when an adjust adds fabric back', async () => {
+    const first = await oneRoll();
+    expect(first.emptiedAt).toBeNull();
+    const [second] = await prisma.$transaction((tx) =>
+      receive(tx, new Date(clock.now().getTime() + 1000), { count: 1, costPerMetreMills: 3400, actor: 'test', isSimulated: true }),
+    );
+    for (let i = 0; i < 16; i++) expect((await cutOnce(600 + i))?.rollCode).toBe(first.code);
+    expect((await rollOf(first.code)).emptiedAt).toEqual(clock.now());
+    expect((await rollOf(second.code)).emptiedAt).toBeNull();
+    expect((await cutOnce(616))?.rollCode).toBe(second.code);
+    const sims = await http().get('/sim/stock').set('x-sim-key', process.env.SIM_KEY!).expect(200);
+    expect(sims.body).toEqual({ cuttableRolls: 1 });
+
+    await http()
+      .post('/admin/stock/adjust')
+      .set('Cookie', cookie)
+      .send({ rollCode: first.code, deltaCm: 500, reason: 'found' })
+      .expect(201);
+    expect((await rollOf(first.code)).emptiedAt).toBeNull();
+    expect(await onHand(first.code)).toBe(500);
+    const listed = (await http().get('/admin/stock').expect(200)).body;
+    expect(listed.find((r: { code: string }) => r.code === first.code).onHandCm).toBe(500);
+
+    await http()
+      .post('/admin/stock/adjust')
+      .set('Cookie', cookie)
+      .send({ rollCode: first.code, deltaCm: -500, reason: 'count' })
+      .expect(201);
+    expect((await rollOf(first.code)).emptiedAt).toEqual(clock.now());
+    expect((await http().get('/admin/stock').expect(200)).body.find((r: { code: string }) => r.code === first.code).onHandCm).toBe(0);
+    await resetDb();
+  });
+
+  it('marks a stress test roll emptied when its last 10 m goes', async () => {
+    const res = await http().post('/admin/stock/stress').set('x-forwarded-for', freshIp()).expect(201);
+    expect((await rollOf(res.body.roll)).emptiedAt).toEqual(clock.now());
+  });
+
   it('leaves the stock ledger alone on a demo reset', async () => {
     await cutOnce(500);
     const moves = await prisma.stockMovement.count();

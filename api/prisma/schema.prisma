@@ -179,6 +179,9 @@ model Roll {
   lengthCm          Int
   costPerMetreMills Int
   receivedAt        DateTime
+  // Set by the movement that takes on-hand to 0, cleared if an adjust adds
+  // fabric back. Only a filter for the cut's pick; the movements are the balance.
+  emptiedAt         DateTime?
   isTest            Boolean         @default(false)
   isSimulated       Boolean
   movements         StockMovement[]

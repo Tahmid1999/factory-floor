@@ -291,7 +291,8 @@ export class AdminService {
   }
 
   // Newest first: issues take the oldest roll, so what still holds fabric is
-  // at the top. On-hand is summed from the ledger in one grouped read.
+  // at the top. On-hand is summed from the ledger in one grouped read, and only
+  // for rolls not marked emptied; an emptied roll reads 0 without its history.
   async stock() {
     const rolls = await this.prisma.roll.findMany({
       where: { isTest: false },
@@ -300,7 +301,7 @@ export class AdminService {
     });
     const sums = await this.prisma.stockMovement.groupBy({
       by: ['rollId'],
-      where: { rollId: { in: rolls.map((r) => r.id) } },
+      where: { rollId: { in: rolls.filter((r) => r.emptiedAt === null).map((r) => r.id) } },
       _sum: { deltaCm: true },
     });
     const onHand = new Map(sums.map((s) => [s.rollId, s._sum.deltaCm ?? 0]));

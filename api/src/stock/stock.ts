@@ -38,17 +38,30 @@ export async function onHandCm(tx: Tx, rollId: string): Promise<number> {
 
 const onHandSql = Prisma.sql`(SELECT COALESCE(SUM(m."deltaCm"), 0) FROM "StockMovement" m WHERE m."rollId" = r."id")`;
 
+// Rolls are never deleted, so without the emptiedAt filter every pick would sum
+// the whole history of the store.
+const openRoll = Prisma.sql`NOT r."isTest" AND r."emptiedAt" IS NULL`;
+
 export async function cuttableRolls(tx: Tx): Promise<number> {
   const [{ n }] = await tx.$queryRaw<{ n: number }[]>`
-    SELECT COUNT(*)::int AS n FROM "Roll" r WHERE NOT r."isTest" AND ${onHandSql} >= ${BUNDLE_CM}`;
+    SELECT COUNT(*)::int AS n FROM "Roll" r WHERE ${openRoll} AND ${onHandSql} >= ${BUNDLE_CM}`;
   return n;
 }
 
+// The movement that takes a roll to 0 stamps it, in the same transaction, and
+// an adjust that adds fabric back clears the stamp.
+async function markEmptied(tx: Tx, roll: Roll, after: number, now: Date): Promise<void> {
+  const emptiedAt = after === 0 ? now : null;
+  if ((roll.emptiedAt === null) === (emptiedAt === null)) return;
+  await tx.roll.update({ where: { id: roll.id }, data: { emptiedAt } });
+}
+
 // The sum is the truth; the roll row is only the mutex. On-hand is never
-// stored, because a cached column can drift from the ledger and would need the
-// UPDATE the app role is denied on it. Locking the roll row queues the cuts on
-// one roll behind each other, and the SUM after the lock, a new statement
-// under READ COMMITTED, sees every cut that went before.
+// stored, because a cached balance can drift from the ledger. Locking the roll
+// row queues the cuts on one roll behind each other, and the SUM after the
+// lock, a new statement under READ COMMITTED, sees every cut that went before.
+// emptiedAt is only a filter hint that keeps the pick off rolls already used
+// up; it never decides how much a roll holds.
 //
 // The pick and the lock are one statement, but its SUM is from before the lock
 // was granted. So a cut that waited sums again, and if the roll ran short in
@@ -61,7 +74,7 @@ export async function issueForBundle(
   for (;;) {
     const [roll] = await tx.$queryRaw<Roll[]>`
       SELECT r.* FROM "Roll" r
-      WHERE NOT r."isTest" AND ${onHandSql} >= ${BUNDLE_CM}
+      WHERE ${openRoll} AND ${onHandSql} >= ${BUNDLE_CM}
       ORDER BY r."receivedAt", r."code"
       LIMIT 1
       FOR UPDATE OF r`;
@@ -82,6 +95,7 @@ export async function issueForBundle(
         at: now,
       },
     });
+    await markEmptied(tx, roll, onHand - cm, now);
     await post(tx, now, {
       kind: 'fabric',
       amountMills: mills,
@@ -99,10 +113,13 @@ export async function issueForBundle(
 // stress button's test rolls carry no money.
 export async function issueFromRoll(tx: Tx, now: Date, rollId: string, cm: number, actor: string): Promise<boolean> {
   const [roll] = await tx.$queryRaw<Roll[]>`SELECT * FROM "Roll" WHERE "id" = ${rollId} FOR UPDATE`;
-  if (!roll || (await onHandCm(tx, roll.id)) < cm) return false;
+  if (!roll) return false;
+  const onHand = await onHandCm(tx, roll.id);
+  if (onHand < cm) return false;
   await tx.stockMovement.create({
     data: { rollId, kind: 'issue_to_cutting', deltaCm: -cm, actor, isSimulated: roll.isSimulated, at: now },
   });
+  await markEmptied(tx, roll, onHand - cm, now);
   return true;
 }
 
@@ -172,6 +189,7 @@ export async function adjust(
   await tx.stockMovement.create({
     data: { rollId: roll.id, kind: 'adjust', deltaCm: a.deltaCm, actor: who.login, reason: a.reason, isSimulated: false, at: now },
   });
+  await markEmptied(tx, roll, after, now);
   const amountMills = millsFor(-a.deltaCm, roll.costPerMetreMills);
   await post(tx, now, { kind: 'adjustment', amountMills, at: now, bundleCode: null, isSimulated: false });
   await audit(

@@ -284,4 +284,26 @@ describe('guests', () => {
       await seedLine(prisma);
     }
   });
+
+  it('answers a refill with the same 503 and writes nothing when the line is out of fabric', async () => {
+    const agent = request.agent(app.getHttpServer());
+    const ip = freshIp();
+    const me = await agent.get('/me').set('x-forwarded-for', ip).expect(200);
+    const guest = await prisma.guest.findUniqueOrThrow({ where: { name: me.body.name } });
+    await prisma.bundle.updateMany({ where: { guestId: guest.id }, data: { nextStep: 3 } });
+    await emptyStock();
+    try {
+      const bundles = await prisma.bundle.count();
+      const postings = await prisma.posting.count();
+      const res = await agent.post('/me/bundles/refill').set('x-forwarded-for', ip).expect(503);
+      expect(res.body).toEqual({ error: 'line out of fabric, try in a minute' });
+      expect(await prisma.bundle.count()).toBe(bundles);
+      expect(await prisma.posting.count()).toBe(postings);
+      expect(await prisma.stockMovement.count()).toBe(0);
+      // The refill rolled back, so it does not count against the day.
+      expect((await prisma.guest.findUniqueOrThrow({ where: { id: guest.id } })).refillsToday).toBe(0);
+    } finally {
+      await seedLine(prisma);
+    }
+  });
 });
