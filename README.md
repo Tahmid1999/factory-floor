@@ -4,6 +4,8 @@ It is live at https://factory.tahmidalavi.com. `/admin` is read-only unless I si
 
 It is rebuilt from scratch from a system I shipped, which is under NDA, so nothing here names the factory or its numbers.
 
+<img src="docs/station-ok.png" width="300" alt="The station on a phone: S-07 sew collar, a green OK for a bundle scanned in 10 ms, the pending count, last sync and the visitor's pieces and pay for today">
+
 
 ## The hardest decision
 
@@ -31,6 +33,10 @@ In all async, QC's flag waits in QC's queue, S-08's scan reaches the server firs
 In hybrid, the flag is a gate call, so with Wi-Fi down it fails and the bundle stays held at QC; step 2 does not unlock until the flag has reached the server. S-08 still shows green for a moment, because it is offline-first too. Its batch syncs, the server rejects the scan, and the station turns amber with `RESYNC · 1 scan rejected`. The card says `$0.00 wasted` and how long it took from S-08's green to the resync.
 
 Either way the redone collar is paid $0.00. If rework were paid, operators would fail QC on purpose to double their wages.
+
+<img src="docs/trap-async.png" width="260" alt="All async: the sleeve scan at S-08 shows OK, and the trap result reads sleeve sewn on a rework bundle, $0.53 wasted"> <img src="docs/trap-hybrid.png" width="260" alt="Hybrid: S-08 turns amber, RESYNC, 1 scan rejected, the bundle went to rework; the trap result reads stopped at S-08 in 0.4 s, $0.00 wasted">
+
+Both runs above are from the live deploy on 10 Nov 2026.
 
 The Wi-Fi switch on the station works outside the trap too. Scans keep going green, the pending count grows, the next retry counts down, and the queue drains when you switch it back.
 
@@ -68,6 +74,10 @@ RabbitMQ is not needed for this demo's volume. It is here because the real syste
 Money is integer mills (a thousandth of a dollar). Applying a step writes a labour posting at the piece rate in force at the scan time; rates carry an `effectiveFrom` date. Waste is priced from those postings: when a rework flag lands, every step applied after the flag's scan time is marked wasted, and its labour plus that operation's trims is the waste. One function does that, for the trap card and for the admin.
 
 The audit table can be inserted into and read by the app's database role, and that's all. UPDATE and DELETE are revoked in a migration, and a test proves an UPDATE fails. Migrations run as a second role.
+
+![One bundle's timeline in the admin after the all-async trap: the sleeve scan marked wasted, the clear back to sew collar in round 1, and the redone collar posted nothing](docs/admin-bundle.png)
+
+The timeline shows why: the flag's scan time is before the sleeve's, even though it reached the server 20 s later, so the sleeve is the wasted step.
 
 This is slice 1. The stock ledger, fabric and revenue postings, payroll and the month-end P&L come in slice 2. The postings table already has their kinds.
 
@@ -112,7 +122,7 @@ Set `SIM_ENABLED=0` in `.env` for a quiet line.
 ### Tests
 
     cd api && npm test                      # unit, 55
-    npm run migrate:test && npm run test:e2e   # against factory_test and RabbitMQ, 119
+    npm run migrate:test && npm run test:e2e   # against factory_test and RabbitMQ, 120
     cd web && npx playwright install chromium && npx playwright test   # phone browser, 24
 
 Playwright builds and starts its own API and worker on `factory_test` with the simulated line off, and shortens the trap's Wi-Fi drop to 3 s. `npx playwright test -c playwright.sim.config.ts` runs the trap in both modes again with the line running fast beside it, which is how I found the simulator touching a visitor's bundle.
