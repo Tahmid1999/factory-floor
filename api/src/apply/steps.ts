@@ -20,6 +20,8 @@ export type Work = {
   state: { status: BundleStatus; nextStep: number; route: string[]; reworkRound: number };
   done: { op: string; round: number }[];
   rates: PieceRate[];
+  trims: Map<string, number>;
+  fobMills: number;
   now: Date;
   hood: Hood[];
 };
@@ -44,6 +46,8 @@ export async function workOn(tx: Tx, bundle: Bundle, now: Date, hood: Hood[]): P
     state: { status: bundle.status, nextStep: bundle.nextStep, route: style.route, reworkRound: bundle.reworkRound },
     done: await tx.bundleEvent.findMany({ where: { bundleId: bundle.id }, select: { op: true, round: true } }),
     rates: await tx.pieceRate.findMany({ where: { styleId: bundle.styleId } }),
+    trims: new Map((await tx.operation.findMany()).map((o) => [o.code, o.trimsMills])),
+    fobMills: style.fobMills,
     now,
     hood,
   };
@@ -97,6 +101,32 @@ export async function applyStep(w: Work, s: Step): Promise<BundleEvent> {
         isSimulated,
       });
     }
+  }
+
+  // Per bundle, and again for every redo: the rework used the trims twice.
+  const trimsMills = w.trims.get(s.op) ?? 0;
+  if (trimsMills > 0) {
+    await post(tx, w.now, {
+      kind: 'trims',
+      amountMills: trimsMills,
+      at: s.correctedAt,
+      bundleCode: bundle.code,
+      eventId: event.id,
+      guestId: bundle.guestId,
+      isSimulated,
+    });
+  }
+  // Booked when it ships, not when it is packed: until then it is stock.
+  if (s.op === 'ship') {
+    await post(tx, w.now, {
+      kind: 'revenue',
+      amountMills: w.fobMills * bundle.pieces,
+      at: s.correctedAt,
+      bundleCode: bundle.code,
+      eventId: event.id,
+      guestId: bundle.guestId,
+      isSimulated,
+    });
   }
 
   state.nextStep += 1;

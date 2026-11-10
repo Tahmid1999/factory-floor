@@ -262,7 +262,9 @@ describe('apply worker', () => {
     await g.send('S-08', [ev(2, code, 'sew_sleeve', 10_000)]);
     const redo = await until(() => resultOf(g.devices['S-08'], 2, 'applied'));
     const redoEvent = await prisma.bundleEvent.findUniqueOrThrow({ where: { inboxId: redo.id } });
-    expect(await prisma.posting.count({ where: { eventId: redoEvent.id } })).toBe(0);
+    // Unpaid labour, but the trims were used again.
+    expect(await prisma.posting.count({ where: { eventId: redoEvent.id, kind: 'labour' } })).toBe(0);
+    expect(await prisma.posting.count({ where: { eventId: redoEvent.id, kind: 'trims' } })).toBe(1);
 
     await g.send('Q-01', [ev(1, code, 'qc_flag', 20_000)]);
     await until(() => resultOf(g.devices['Q-01'], 1, 'applied'));

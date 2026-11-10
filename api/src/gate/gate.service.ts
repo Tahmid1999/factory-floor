@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { Hood, Tx, Work, applyStep, releaseHeld, workOn } from '../apply/steps';
 import { markWaste, noticeWasted } from '../apply/waste';
 import { audit } from '../audit/audit';
+import { post } from '../money/postings';
 import { CLOCK, Clock } from '../clock';
 import { GuestsService } from '../guests/guests.service';
 import { Actor, mayScan } from '../guests/ownership';
@@ -267,9 +268,25 @@ export class GateService {
     const before = snapshot(w);
     state.status = 'scrapped';
     await tx.bundle.update({ where: { id: bundle.id }, data: { status: 'scrapped' } });
-    // Slice 1 stops at the status. The write-off posting (fabric plus labour
-    // so far) needs the stock ledger and comes with it in slice 2.
     const event = await this.gateEvent(w, device, body, 'scrap');
+    // A memo line: what the bundle had cost by now. The costs were booked when
+    // they happened, so the P&L never subtracts this.
+    const spent = await tx.posting.aggregate({
+      where: { bundleCode: bundle.code, kind: { in: ['fabric', 'labour', 'trims'] } },
+      _sum: { amountMills: true },
+    });
+    const lost = spent._sum.amountMills ?? 0;
+    if (lost > 0) {
+      await post(tx, w.now, {
+        kind: 'writeoff',
+        amountMills: lost,
+        at: w.now,
+        bundleCode: bundle.code,
+        eventId: event.id,
+        guestId: bundle.guestId,
+        isSimulated: device.isSimulated,
+      });
+    }
     await audit(
       tx,
       { actor: actorName, role: 'supervisor', action: 'scrap', entity: `bundle:${bundle.code}`, before, after: snapshot(w) },
