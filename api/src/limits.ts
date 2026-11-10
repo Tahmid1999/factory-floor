@@ -32,6 +32,15 @@ export function refund(key: string): void {
   if (w && w.count > 0) w.count -= 1;
 }
 
+// The stress button opens 20 transactions at once and anyone may press it, so
+// one address gets a run a minute and everyone together 20 an hour. The
+// address goes first, so one address pressing again cannot spend the total.
+export function stressRefusal(ip: string, now: number): string | null {
+  if (!hit(`stress:${ip}`, 1, 60, now)) return 'one stress run a minute, try again shortly';
+  if (!hit('stress:all', 20, 3600, now)) return 'stress runs are used up for this hour, try later';
+  return null;
+}
+
 // For the spec: how many windows are held.
 export function windowCount(): number {
   return windows.size;

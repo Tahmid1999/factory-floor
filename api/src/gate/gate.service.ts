@@ -11,6 +11,7 @@ import { StationCode } from '../line/line';
 import { canFlag, decide, rollBackTo } from '../line/state-machine';
 import { PrismaService } from '../prisma.service';
 import { HoodService } from '../hood/hood';
+import { OutOfFabric } from '../stock/stock';
 
 export const GATE_ACTIONS = ['cut', 'qc_flag', 'qc_pass', 'qc_fail', 'ship', 'clear_rework', 'scrap'] as const;
 export type GateAction = (typeof GATE_ACTIONS)[number];
@@ -108,6 +109,19 @@ export class GateService {
         { maxWait: CONNECT_WAIT_MS, timeout: TX_MS },
       );
     } catch (e) {
+      // The cut rolled back whole, so like any refusal it wrote nothing and a
+      // repeat of the gateId is judged again. The storekeeper sees the empty
+      // store on its next move.
+      if (e instanceof OutOfFabric) {
+        return {
+          ok: false,
+          status: 'active',
+          nextOp: 'cut',
+          round: 0,
+          message: 'no fabric · storekeeper called',
+          ms: Math.round(performance.now() - started),
+        };
+      }
       // Two calls with the same gateId on different bundles, or two cuts,
       // do not share a lock; the unique index settles it and the loser
       // answers with the winner's reply.

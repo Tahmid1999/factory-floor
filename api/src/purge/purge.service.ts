@@ -8,6 +8,7 @@ import { deleteGuestData, lockBundles, orphanPostings } from './guest-data';
 
 const GUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const SIM_KEEP_MS = 60 * 24 * 60 * 60 * 1000;
+const TEST_ROLL_TTL_MS = 60 * 60 * 1000;
 const PER_PASS = 200;
 
 // Worker only. A guest's data goes after 24 h; the postings made from it stay,
@@ -45,6 +46,7 @@ export class PurgeService {
       purged += ids.length;
     }
     await this.dropOldSimRows(new Date(now - SIM_KEEP_MS));
+    await this.dropTestRolls(new Date(now - TEST_ROLL_TTL_MS));
     if (purged > 0) {
       const text = `purge ${purged} guests`;
       this.rabbit.publishHood({ t: now, kind: 'purge', proc: 'worker', text }).catch(() => undefined);
@@ -69,6 +71,16 @@ export class PurgeService {
         (SELECT "id" FROM "ScanInbox" WHERE "deviceId" IN ${sim} AND "receivedAt" < ${before})`;
       await tx.$executeRaw`DELETE FROM "ScanInbox" WHERE "deviceId" IN ${sim} AND "receivedAt" < ${before}`;
       await tx.$executeRaw`DELETE FROM "BundleEvent" WHERE "isSimulated" AND "correctedAt" < ${before}`;
+    });
+  }
+
+  // The stress button's rolls are for watching once. The ledger's trigger lets
+  // their movements go and no other roll's; real rolls are the stock record.
+  private async dropTestRolls(before: Date): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const old = Prisma.sql`(SELECT "id" FROM "Roll" WHERE "isTest" AND "receivedAt" < ${before})`;
+      await tx.$executeRaw`DELETE FROM "StockMovement" WHERE "rollId" IN ${old}`;
+      await tx.$executeRaw`DELETE FROM "Roll" WHERE "id" IN ${old}`;
     });
   }
 

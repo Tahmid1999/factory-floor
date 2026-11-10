@@ -8,7 +8,8 @@ import { FixedClock } from '../src/clock';
 import type { HoodEvent } from '../src/hood/hood-event';
 import { POLO_ROUTE } from '../src/line/line';
 import { Rabbit } from '../src/rabbit';
-import { bootApi, bootWorker, purgeQueues, resetDb } from './helpers';
+import { seedLine } from '../src/seed';
+import { bootApi, bootWorker, emptyStock, purgeQueues, resetDb } from './helpers';
 
 let nextIp = 10;
 const freshIp = () => `192.0.2.${nextIp++}`;
@@ -401,5 +402,25 @@ describe('gate scans', () => {
     clock.advance(1000);
     await g.gate('Q-02', { gateId: 'not-a-uuid', bundleCode: g.codes[0], action: 'qc_pass' }).expect(400);
     await g.gate('Q-02', { bundleCode: g.codes[0], action: 'qc_fail' }).expect(400);
+  });
+
+  it('refuses a C-01 cut with no fabric in stock and writes nothing', async () => {
+    await emptyStock();
+    try {
+      clock.advance(1000);
+      const cutter = await simDevice('C-01', 'sim-cutter');
+      const count = async () => [
+        await prisma.bundle.count(),
+        await prisma.bundleEvent.count(),
+        await prisma.posting.count(),
+        await prisma.stockMovement.count(),
+      ];
+      const before = await count();
+      const res = await simGate(cutter, { action: 'cut' }).expect(200);
+      expect(res.body).toMatchObject({ ok: false, message: 'no fabric · storekeeper called' });
+      expect(await count()).toEqual(before);
+    } finally {
+      await seedLine(prisma);
+    }
   });
 });

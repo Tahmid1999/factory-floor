@@ -10,8 +10,12 @@ import {
   STYLE_CODE,
   STYLE_NAME,
 } from './line/line';
+import { receive } from './stock/stock';
 
-export async function seedLine(prisma: PrismaClient): Promise<void> {
+const OPENING_ROLLS = 6;
+const OPENING_COST_MILLS = 3400;
+
+export async function seedLine(prisma: PrismaClient, now: Date = new Date()): Promise<void> {
   const style = await prisma.style.upsert({
     where: { code: STYLE_CODE },
     update: { name: STYLE_NAME, piecesPerBundle: PIECES_PER_BUNDLE, fobMills: FOB_MILLS, route: POLO_ROUTE },
@@ -35,6 +39,14 @@ export async function seedLine(prisma: PrismaClient): Promise<void> {
     } else {
       await prisma.pieceRate.create({ data: { ...where, ratePerPieceMills } });
     }
+  }
+
+  // Opening stock goes in only on a ledger with no real roll in it, so running
+  // the seed again adds no fabric.
+  if (!(await prisma.roll.findFirst({ where: { isTest: false } }))) {
+    await prisma.$transaction((tx) =>
+      receive(tx, now, { count: OPENING_ROLLS, costPerMetreMills: OPENING_COST_MILLS, actor: 'seed', isSimulated: true }),
+    );
   }
 
   const password = process.env.ADMIN_PASSWORD;

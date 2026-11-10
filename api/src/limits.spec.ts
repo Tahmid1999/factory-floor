@@ -1,4 +1,4 @@
-import { hit, windowCount } from './limits';
+import { hit, stressRefusal, windowCount } from './limits';
 
 describe('hit', () => {
   it('allows 5 in a window and refuses the 6th', () => {
@@ -28,5 +28,22 @@ describe('hit', () => {
     for (let i = 0; i < 1000; i++) hit('k-new', 5000, 60, t + 60_000);
     expect(windowCount()).toBeLessThan(100);
     expect(hit('k-new', 5000, 60, t + 60_000)).toBe(true);
+  });
+});
+
+describe('stressRefusal', () => {
+  it('gives one address one run a minute', () => {
+    const t = 5_000_000;
+    expect(stressRefusal('192.0.2.1', t)).toBeNull();
+    expect(stressRefusal('192.0.2.1', t + 59_000)).toEqual(expect.any(String));
+    expect(stressRefusal('192.0.2.1', t + 60_000)).toBeNull();
+  });
+
+  it('stops everyone after 20 runs in an hour', () => {
+    const t = 9_000_000;
+    // The total window is shared, so this starts after the runs above have aged out.
+    for (let i = 0; i < 20; i++) expect(stressRefusal(`198.51.100.${i}`, t + i)).toBeNull();
+    expect(stressRefusal('198.51.100.200', t + 100)).toEqual(expect.any(String));
+    expect(stressRefusal('198.51.100.201', t + 3_600_000)).toBeNull();
   });
 });

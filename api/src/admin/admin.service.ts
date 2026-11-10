@@ -1,4 +1,12 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { performance } from 'node:perf_hooks';
 import { PieceRate, Prisma } from '@prisma/client';
 import { wasteOf, wasteOfMany } from '../apply/waste';
 import { audit } from '../audit/audit';
@@ -7,10 +15,18 @@ import { deviceLabel, HoodService } from '../hood/hood';
 import { POLO_ROUTE, STYLE_CODE } from '../line/line';
 import { PrismaService } from '../prisma.service';
 import { deleteGuestData, lockBundles, orphanPostings } from '../purge/guest-data';
+import { stressRefusal } from '../limits';
+import { ADJUST_REASONS, AdjustReason, adjust, issueFromRoll, onHandCm, receiveTestRoll } from '../stock/stock';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_MS = 5 * 60 * 1000;
 const MAX_RATE_MILLS = 1_000_000;
+// A bound on a typo, far above any one roll.
+const MAX_ADJUST_CM = 1_000_000;
+const STOCK_ROWS = 100;
+// The stress run: 20 issues of 10 m at once on a 100 m test roll.
+const STRESS_ISSUES = 20;
+const STRESS_CM = 1000;
 
 type Who = { login: string; role: string };
 
@@ -274,8 +290,88 @@ export class AdminService {
     });
   }
 
+  // Newest first: issues take the oldest roll, so what still holds fabric is
+  // at the top. On-hand is summed from the ledger in one grouped read.
+  async stock() {
+    const rolls = await this.prisma.roll.findMany({
+      where: { isTest: false },
+      orderBy: [{ receivedAt: 'desc' }, { code: 'desc' }],
+      take: STOCK_ROWS,
+    });
+    const sums = await this.prisma.stockMovement.groupBy({
+      by: ['rollId'],
+      where: { rollId: { in: rolls.map((r) => r.id) } },
+      _sum: { deltaCm: true },
+    });
+    const onHand = new Map(sums.map((s) => [s.rollId, s._sum.deltaCm ?? 0]));
+    return rolls.map((r) => ({
+      code: r.code,
+      lengthCm: r.lengthCm,
+      onHandCm: onHand.get(r.id) ?? 0,
+      costPerMetreMills: r.costPerMetreMills,
+      receivedAt: r.receivedAt.getTime(),
+      isSimulated: r.isSimulated,
+    }));
+  }
+
+  // Test rolls too, so the stress result can be opened.
+  async movements(code: string) {
+    const roll = await this.prisma.roll.findUnique({ where: { code } });
+    if (!roll) throw new NotFoundException({ error: 'no such roll' });
+    const rows = await this.prisma.stockMovement.findMany({ where: { rollId: roll.id }, orderBy: [{ at: 'asc' }, { id: 'asc' }] });
+    return rows.map((m) => ({
+      kind: m.kind,
+      deltaCm: m.deltaCm,
+      bundleCode: m.bundleCode,
+      actor: m.actor,
+      reason: m.reason,
+      isSimulated: m.isSimulated,
+      at: m.at.getTime(),
+    }));
+  }
+
+  async adjust(who: Who, body: unknown) {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const { rollCode, deltaCm, reason } = b;
+    if (typeof rollCode !== 'string' || rollCode.length > 32) throw new BadRequestException({ error: 'rollCode required' });
+    if (!Number.isSafeInteger(deltaCm) || deltaCm === 0 || Math.abs(deltaCm as number) > MAX_ADJUST_CM) {
+      throw new BadRequestException({ error: 'deltaCm must be a whole number of centimetres, not 0' });
+    }
+    if (!(ADJUST_REASONS as readonly unknown[]).includes(reason)) {
+      throw new BadRequestException({ error: `reason must be one of ${ADJUST_REASONS.join(', ')}` });
+    }
+    const now = this.clock.now();
+    const out = await this.prisma.$transaction((tx) =>
+      adjust(tx, now, who, { rollCode, deltaCm: deltaCm as number, reason: reason as AdjustReason }),
+    );
+    this.hood.emit('stock', `stock adjust ${out.rollCode} ${deltaCm} cm ${reason}`);
+    return out;
+  }
+
+  // Each issue is its own transaction, as 20 cutting tables would be, so the
+  // roll lock is what keeps them from taking more than the roll holds.
+  async stress(ip: string) {
+    const now = this.clock.now();
+    const refusal = stressRefusal(ip, now.getTime());
+    if (refusal) throw new HttpException({ error: refusal }, 429);
+    const roll = await this.prisma.$transaction((tx) => receiveTestRoll(tx, now));
+    const started = performance.now();
+    const results = await Promise.all(
+      Array.from({ length: STRESS_ISSUES }, () =>
+        this.prisma.$transaction((tx) => issueFromRoll(tx, now, roll.id, STRESS_CM, 'stress'), { maxWait: 10_000 }),
+      ),
+    );
+    const ms = Math.round(performance.now() - started);
+    const accepted = results.filter(Boolean).length;
+    const refused = results.length - accepted;
+    const left = await onHandCm(this.prisma, roll.id);
+    this.hood.emit('stress', `stress ${roll.code} · ${accepted} taken · ${refused} refused · ${ms} ms`);
+    return { roll: roll.code, accepted, refused, onHandCm: left, ms };
+  }
+
   // Guest data and this month's simulated rows go; closed months' postings, the
-  // audit log, users and the line itself stay.
+  // audit log, users, the line itself and the stock ledger stay. The fabric
+  // the reset bundles took stays issued: the ledger is append-only.
   async reset(who: Who) {
     const now = this.clock.now();
     const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));

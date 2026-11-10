@@ -8,7 +8,10 @@ import { AppModule } from '../src/app.module';
 import { CLOCK, Clock, FixedClock } from '../src/clock';
 import { APPLY_QUEUE } from '../src/rabbit';
 import { seedLine } from '../src/seed';
+import { receive } from '../src/stock/stock';
 import { WorkerModule } from '../src/worker.module';
+
+const SPARE_ROLLS = 24;
 
 type BootOptions = { clock?: Clock; extraControllers?: Type<unknown>[] };
 
@@ -44,10 +47,30 @@ export async function resetDb(): Promise<void> {
     const list = tables.map((t) => `"${t.tablename}"`).join(', ');
     await owner.$executeRawUnsafe(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
     await owner.$executeRawUnsafe('ALTER SEQUENCE bundle_code_seq RESTART WITH 8492');
-    await seedLine(app);
+    await owner.$executeRawUnsafe('ALTER SEQUENCE roll_code_seq RESTART WITH 1001');
+    await owner.$executeRawUnsafe('ALTER SEQUENCE test_roll_code_seq RESTART WITH 1');
+    // Received before any spec's clock, so a roll's ledger reads in order.
+    const opening = new Date('2026-01-01T00:00:00Z');
+    await seedLine(app, opening);
+    // The seed's 6 rolls cut about 100 bundles, fewer than a busy spec makes,
+    // so every spec starts with more fabric than it can use.
+    await app.$transaction((tx) =>
+      receive(tx, opening, { count: SPARE_ROLLS, costPerMetreMills: 3400, actor: 'test', isSimulated: true }),
+    );
   } finally {
     await owner.$disconnect();
     await app.$disconnect();
+  }
+}
+
+// The ledger is append-only for the app role, so an empty store is made the
+// way resetDb wipes: as the owner, with TRUNCATE, which no row trigger sees.
+export async function emptyStock(): Promise<void> {
+  const owner = new PrismaClient({ datasources: { db: { url: process.env.TEST_OWNER_DATABASE_URL } } });
+  try {
+    await owner.$executeRawUnsafe('TRUNCATE "StockMovement", "Roll"');
+  } finally {
+    await owner.$disconnect();
   }
 }
 

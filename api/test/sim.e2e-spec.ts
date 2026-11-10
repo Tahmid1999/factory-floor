@@ -6,7 +6,8 @@ import { FixedClock } from '../src/clock';
 import { POLO_ROUTE } from '../src/line/line';
 import { decide } from '../src/line/state-machine';
 import { SimService, simConfigFromEnv } from '../src/sim/sim.service';
-import { bootApi, bootWorker, purgeQueues, resetDb, until } from './helpers';
+import request from 'supertest';
+import { bootApi, bootWorker, emptyStock, purgeQueues, resetDb, until } from './helpers';
 
 // A small seeded generator, so a failing run can be run again.
 function mulberry32(seed: number) {
@@ -167,5 +168,61 @@ describe('final QC after inline QC', () => {
       { code: 'B-9001', nextStep: qcFinal + 1 },
       { code: 'B-9002', nextStep: qcFinal + 1 },
     ]);
+  });
+});
+
+// The storekeeper is the one sim move that is not a station: it reads the
+// stock and receives a lot of 6 when fewer than 3 rolls can still cut a bundle.
+describe('sim storekeeper', () => {
+  let api: INestApplication;
+  let prisma: PrismaClient;
+  let sim: SimService;
+  const clock = new FixedClock(new Date('2026-11-09T10:00:00Z'));
+
+  beforeAll(async () => {
+    await resetDb();
+    api = await bootApi(clock);
+    await api.listen(0);
+    prisma = new PrismaClient();
+    const port = (api.getHttpServer().address() as AddressInfo).port;
+    sim = new SimService(
+      { ...simConfigFromEnv({ ...process.env, API_INTERNAL_URL: `http://127.0.0.1:${port}` }), random: mulberry32(7) },
+      clock,
+    );
+  });
+
+  afterAll(async () => {
+    await prisma.$disconnect();
+    await api.close();
+  });
+
+  it('answers /sim/stock and /stock/receive to the sim only', async () => {
+    await request(api.getHttpServer()).get('/sim/stock').expect(404);
+    const res = await request(api.getHttpServer()).get('/sim/stock').set('x-sim-key', process.env.SIM_KEY!).expect(200);
+    expect(res.body).toEqual({ cuttableRolls: await prisma.roll.count({ where: { isTest: false } }) });
+  });
+
+  it('does nothing while 3 or more rolls can cut, and receives 6 at a drawn price below that', async () => {
+    const rolls0 = await prisma.roll.count();
+    expect(await sim['store']()).toBe(false);
+    expect(await prisma.roll.count()).toBe(rolls0);
+
+    await emptyStock();
+    expect(await sim['store']()).toBe(true);
+    const rolls = await prisma.roll.findMany({ include: { movements: true } });
+    expect(rolls).toHaveLength(6);
+    const cost = rolls[0].costPerMetreMills;
+    expect(cost).toBeGreaterThanOrEqual(3200);
+    expect(cost).toBeLessThanOrEqual(3600);
+    expect(cost % 50).toBe(0);
+    for (const r of rolls) {
+      expect(r).toMatchObject({ lengthCm: 30_000, costPerMetreMills: cost, isTest: false, isSimulated: true });
+      expect(r.movements).toEqual([
+        expect.objectContaining({ kind: 'receive', deltaCm: 30_000, actor: 'sim-store', isSimulated: true }),
+      ]);
+    }
+    // No device: receiving fabric is not a scan.
+    expect(await prisma.device.count({ where: { simName: 'sim-store' } })).toBe(0);
+    expect(await sim['store']()).toBe(false);
   });
 });

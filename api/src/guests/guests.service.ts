@@ -8,12 +8,15 @@ import { rateAt } from '../line/rates';
 import { post } from '../money/postings';
 import { wasteOfMany } from '../apply/waste';
 import { PrismaService } from '../prisma.service';
+import { issueForBundle, OutOfFabric } from '../stock/stock';
 
 type Tx = Prisma.TransactionClient;
 
 const BUNDLES_PER_GUEST = 3;
 const REFILLS_PER_DAY = 10;
 const SIM_CUTTER = 'sim-cutter';
+
+const outOfFabric = () => new HttpException({ error: 'line out of fabric, try in a minute' }, 503);
 
 export type MeBody = {
   // The station keys its devices by this: names are drawn again for new
@@ -77,6 +80,7 @@ export class GuestsService {
         });
       } catch (e) {
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') continue;
+        if (e instanceof OutOfFabric) throw outOfFabric();
         throw e;
       }
     }
@@ -92,7 +96,8 @@ export class GuestsService {
   // comes from the one sequence. A bundle with no guest belongs to the sim.
   // The cut event and posting follow the cutter: a visitor's bundle cut by the
   // sim is still the sim's work, so "exclude simulated" leaves only what the
-  // visitor scanned.
+  // visitor scanned. With no roll to cut from it throws OutOfFabric, and the
+  // caller's transaction takes every bundle of the call back with it.
   async cutBundles(
     tx: Tx,
     o: { count: number; guestId: string | null; cutter: Device; now: Date; gateId?: string },
@@ -140,6 +145,14 @@ export class GuestsService {
         guestId: o.guestId,
         isSimulated: o.cutter.isSimulated,
       });
+      const fabric = await issueForBundle(tx, o.now, {
+        bundleCode: bundle.code,
+        actor: o.cutter.simName ?? 'sim',
+        isSimulated: o.cutter.isSimulated,
+        eventId: event.id,
+        guestId: o.guestId,
+      });
+      if (!fabric) throw new OutOfFabric();
       cut.push({ bundle, event });
     }
     return cut;
@@ -228,16 +241,22 @@ export class GuestsService {
       throw new HttpException({ error: 'finish the bundles you have first', bundle: untouched.code }, 409);
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      // The conditional update is the counter, so two parallel refills cannot
-      // both take the last slot.
-      const taken = await tx.guest.updateMany({
-        where: { id: guest.id, refillsToday: { lt: REFILLS_PER_DAY } },
-        data: { refillsToday: { increment: 1 } },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        // The conditional update is the counter, so two parallel refills cannot
+        // both take the last slot.
+        const taken = await tx.guest.updateMany({
+          where: { id: guest.id, refillsToday: { lt: REFILLS_PER_DAY } },
+          data: { refillsToday: { increment: 1 } },
+        });
+        if (taken.count === 0) throw new HttpException({ error: 'refill limit reached for today' }, 429);
+        await this.addBundles(tx, guest.id, BUNDLES_PER_GUEST, now);
       });
-      if (taken.count === 0) throw new HttpException({ error: 'refill limit reached for today' }, 429);
-      await this.addBundles(tx, guest.id, BUNDLES_PER_GUEST, now);
-    });
+    } catch (e) {
+      // The refill rolled back with the cut, so it does not count against the day.
+      if (e instanceof OutOfFabric) throw outOfFabric();
+      throw e;
+    }
     return this.me((await this.findGuest(guest.id))!);
   }
 

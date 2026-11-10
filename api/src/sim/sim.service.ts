@@ -64,8 +64,16 @@ const OPERATORS: { station: string; simName: string }[] = [
   { station: 'SUP', simName: 'sim-sup' },
 ];
 
-const ROUND_ROBIN = ['C-01', 'S-07', 'S-08', 'S-09', 'S-10', 'Q-01', 'Q-02', 'P-01', 'X-01', 'SUP'];
+// sim-store is not a station and registers no device: receiving fabric is not
+// a scan. Its move costs one read, and a write only when stock is low.
+const ROUND_ROBIN = ['C-01', 'S-07', 'S-08', 'S-09', 'S-10', 'Q-01', 'Q-02', 'P-01', 'X-01', 'SUP', 'sim-store'];
 const OP_AT: Record<string, string> = { 'S-07': 'sew_collar', 'S-08': 'sew_sleeve', 'S-09': 'side_seam', 'S-10': 'hem', 'P-01': 'pack' };
+
+// The storekeeper orders a lot of 6 once fewer than 3 rolls can cut a bundle,
+// at a price drawn from 3200 to 3600 a metre in steps of 50.
+const LOW_ROLLS = 3;
+const LOT_ROLLS = 6;
+const LOT_PRICES = Array.from({ length: 9 }, (_, i) => 3200 + 50 * i);
 
 // The op a defect sends a bundle back to: the station that made it.
 const DEFECT_OP: Record<Defect, string> = {
@@ -217,6 +225,8 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
         return this.ship();
       case 'SUP':
         return this.supervise();
+      case 'sim-store':
+        return this.store();
       default:
         return this.sew(station);
     }
@@ -237,9 +247,27 @@ export class SimService implements OnModuleInit, OnModuleDestroy {
   // A sim that cannot reach the api (wrong key, api down, a 404 from the
   // sim-caller check) otherwise stands still without a word. One line a
   // minute per kind says why without filling the log every tick.
-  private warnOnce(what: 'register' | 'work', why: string): void {
+  private warnOnce(what: 'register' | 'work' | 'stock', why: string): void {
     if (!hit(`sim-warn:${what}`, 1, 60, this.clock.now().getTime())) return;
     this.log.warn(`sim ${what} failed, ${why}`);
+  }
+
+  private async store(): Promise<boolean> {
+    try {
+      const r = await this.http.get('/sim/stock');
+      if (r.status !== 200) {
+        this.warnOnce('stock', `http ${r.status}`);
+        return false;
+      }
+      if (r.body.cuttableRolls >= LOW_ROLLS) return false;
+      const costPerMetreMills = LOT_PRICES[Math.floor(this.cfg.random() * LOT_PRICES.length)];
+      const got = await this.http.send('/stock/receive', { count: LOT_ROLLS, costPerMetreMills });
+      if (got.status !== 201) this.warnOnce('stock', `receive http ${got.status}`);
+      return got.status === 201;
+    } catch (err) {
+      this.warnOnce('stock', (err as Error).message);
+      return false;
+    }
   }
 
   private async cut(): Promise<boolean> {

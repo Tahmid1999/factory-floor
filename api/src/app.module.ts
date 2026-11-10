@@ -10,6 +10,7 @@ import { HealthController } from './health.controller';
 import { HoodModule } from './hood/hood.module';
 import { IngestModule } from './ingest/ingest.module';
 import { SimWorkController } from './sim/sim-work.controller';
+import { StockModule } from './stock/stock.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { SimWorkController } from './sim/sim-work.controller';
     GateModule,
     HoodModule,
     AdminModule,
+    StockModule,
   ],
   controllers: [HealthController, SimWorkController],
 })

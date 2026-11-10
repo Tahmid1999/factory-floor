@@ -147,4 +147,39 @@ describe('guest purge', () => {
     expect(await prisma.bundleEvent.findUnique({ where: { id: recent.event.id } })).not.toBeNull();
     expect(await prisma.posting.count({ where: { bundleCode: bundle.code } })).toBe(postings);
   });
+
+  it('deletes test rolls older than an hour with their movements and keeps real rolls', async () => {
+    const now = clock.now().getTime();
+    const testRoll = (code: string, ageMs: number) =>
+      prisma.roll.create({
+        data: {
+          code,
+          lengthCm: 10_000,
+          costPerMetreMills: 3400,
+          receivedAt: new Date(now - ageMs),
+          isTest: true,
+          isSimulated: false,
+          movements: {
+            create: [
+              { kind: 'receive', deltaCm: 10_000, actor: 'stress', isSimulated: false, at: new Date(now - ageMs) },
+              { kind: 'issue_to_cutting', deltaCm: -1000, actor: 'stress', isSimulated: false, at: new Date(now - ageMs) },
+            ],
+          },
+        },
+      });
+    const old = await testRoll('T-9001', 61 * 60 * 1000);
+    const fresh = await testRoll('T-9002', 10 * 60 * 1000);
+    const real = await prisma.roll.findMany({ where: { isTest: false }, select: { id: true } });
+    const realMoves = await prisma.stockMovement.count({ where: { rollId: { in: real.map((r) => r.id) } } });
+    expect(real.length).toBeGreaterThan(0);
+
+    await worker.get(PurgeService).runOnce();
+
+    expect(await prisma.roll.findUnique({ where: { id: old.id } })).toBeNull();
+    expect(await prisma.stockMovement.count({ where: { rollId: old.id } })).toBe(0);
+    expect(await prisma.roll.findUnique({ where: { id: fresh.id } })).not.toBeNull();
+    expect(await prisma.stockMovement.count({ where: { rollId: fresh.id } })).toBe(2);
+    expect(await prisma.roll.count({ where: { isTest: false } })).toBe(real.length);
+    expect(await prisma.stockMovement.count({ where: { rollId: { in: real.map((r) => r.id) } } })).toBe(realMoves);
+  });
 });

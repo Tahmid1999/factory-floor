@@ -49,6 +49,31 @@ export class AdminController {
     return this.admin.audit(str(action));
   }
 
+  @Get('stock')
+  @Reads('stock')
+  stock() {
+    return this.admin.stock();
+  }
+
+  @Get('stock/:code/movements')
+  @Reads('stock')
+  movements(@Param('code') code: string) {
+    return this.admin.movements(code);
+  }
+
+  @Post('stock/adjust')
+  @Writes()
+  adjust(@Req() req: ActingRequest, @Body() body: unknown) {
+    return this.admin.adjust({ login: req.acting.login ?? 'admin', role: req.acting.role }, body);
+  }
+
+  // Open to anyone: it is the "try breaking it" button. Its own limits sit in
+  // the service, under the read limit every route here has.
+  @Post('stock/stress')
+  stress(@Req() req: ActingRequest) {
+    return this.admin.stress(req.ip ?? '');
+  }
+
   @Post('rates')
   @Writes()
   rates(@Req() req: ActingRequest, @Body() body: unknown) {

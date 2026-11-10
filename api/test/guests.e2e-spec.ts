@@ -2,7 +2,8 @@ import { INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import request from 'supertest';
 import { FixedClock } from '../src/clock';
-import { bootApi, resetDb } from './helpers';
+import { seedLine } from '../src/seed';
+import { bootApi, emptyStock, resetDb } from './helpers';
 
 // Supertest connects from loopback, so a client address is faked the way the
 // production proxy reports it: through x-forwarded-for.
@@ -82,6 +83,21 @@ describe('guests', () => {
     });
     // the sim cutter is shared, not recreated per bundle
     expect(await prisma.device.count({ where: { simName: 'sim-cutter' } })).toBe(1);
+  });
+
+  it("issues 1800 cm of fabric for each of a new guest's three bundles", async () => {
+    const res = await http().get('/me').set('x-forwarded-for', freshIp()).expect(200);
+    const codes = res.body.bundles.map((b: { code: string }) => b.code);
+    const moves = await prisma.stockMovement.findMany({ where: { bundleCode: { in: codes } } });
+    expect(moves.map((m) => [m.kind, m.deltaCm]).sort()).toEqual([
+      ['issue_to_cutting', -1800],
+      ['issue_to_cutting', -1800],
+      ['issue_to_cutting', -1800],
+    ]);
+    const guest = await prisma.guest.findUniqueOrThrow({ where: { name: res.body.name } });
+    const fabric = await prisma.posting.findMany({ where: { bundleCode: { in: codes }, kind: 'fabric' } });
+    expect(fabric).toHaveLength(3);
+    for (const p of fabric) expect(p).toMatchObject({ amountMills: 61_200, guestId: guest.id, isSimulated: true });
   });
 
   it('gives the station the rates, trims and labour posted per bundle', async () => {
@@ -250,5 +266,22 @@ describe('guests', () => {
         .send({ station: 'X-01', simName: 'sim-shipper' })
         .expect(403);
     });
+  });
+
+  it('answers 503 with no guest left behind when the line is out of fabric', async () => {
+    await emptyStock();
+    try {
+      const guests = await prisma.guest.count();
+      const bundles = await prisma.bundle.count();
+      const postings = await prisma.posting.count();
+      const res = await http().get('/me').set('x-forwarded-for', freshIp()).expect(503);
+      expect(res.body).toEqual({ error: 'line out of fabric, try in a minute' });
+      expect(res.headers['set-cookie']).toBeUndefined();
+      expect(await prisma.guest.count()).toBe(guests);
+      expect(await prisma.bundle.count()).toBe(bundles);
+      expect(await prisma.posting.count()).toBe(postings);
+    } finally {
+      await seedLine(prisma);
+    }
   });
 });

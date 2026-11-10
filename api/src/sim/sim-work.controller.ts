@@ -7,6 +7,7 @@ import { mayScan } from '../guests/ownership';
 import { POLO_ROUTE, STATIONS, StationCode } from '../line/line';
 import { canFlag } from '../line/state-machine';
 import { PrismaService } from '../prisma.service';
+import { cuttableRolls } from '../stock/stock';
 
 const MAX_WORK = 10;
 // mayScan filters after the read, so a page of a visitor's bundles that the
@@ -29,8 +30,7 @@ export class SimWorkController {
 
   @Get('work')
   async work(@Req() req: Request, @Query('station') station?: string) {
-    const key = req.header('x-sim-key');
-    if (!isSimCaller(key, req.socket.remoteAddress, req.headers)) throw new NotFoundException();
+    this.simOnly(req);
     if (!station || !Object.prototype.hasOwnProperty.call(STATIONS, station)) {
       throw new BadRequestException({ error: 'unknown station' });
     }
@@ -44,6 +44,17 @@ export class SimWorkController {
     // makes it packed.
     const status: BundleStatus[] = op === 'ship' ? ['packed'] : ['active'];
     return { bundles: (await this.waiting(status, at)).slice(0, MAX_WORK).map((b) => ({ code: b.code, nextOp: op })) };
+  }
+
+  // What the storekeeper looks at before it orders fabric.
+  @Get('stock')
+  async stock(@Req() req: Request) {
+    this.simOnly(req);
+    return { cuttableRolls: await cuttableRolls(this.prisma) };
+  }
+
+  private simOnly(req: Request): void {
+    if (!isSimCaller(req.header('x-sim-key'), req.socket.remoteAddress, req.headers)) throw new NotFoundException();
   }
 
   // Oldest first, and only what the sim may scan. The query narrows to the
