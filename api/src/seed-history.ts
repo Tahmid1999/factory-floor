@@ -289,9 +289,13 @@ export async function runHistory(o: {
 
 async function main() {
   config({ path: resolve(__dirname, '../../.env') });
+  // Fixed when the run starts. A moving now never ends the run: the last tick
+  // is cut to until, so each tick is as long as the one before took in wall
+  // time, and the line runs on at 5 moves a tick, far over the live pace.
+  const started = new Date();
   const s = await runHistory({
     from: SEED_FROM,
-    until: () => new Date(),
+    until: () => started,
     tickMs: Number(process.env.SEED_TICK_MS) || SEED_TICK_MS,
     movesPerTick: Number(process.env.SEED_MOVES_PER_TICK) || SEED_MOVES_PER_TICK,
   });
