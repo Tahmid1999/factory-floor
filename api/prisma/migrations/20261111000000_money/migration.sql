@@ -64,3 +64,17 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER stock_movement_guard BEFORE UPDATE OR DELETE ON "StockMovement"
   FOR EACH ROW EXECUTE FUNCTION stock_movement_guard();
+
+-- Without this the app role could flip isTest on a real roll and then delete
+-- its history through the movement trigger's test-roll exception.
+CREATE FUNCTION roll_test_flag_guard() RETURNS trigger AS $$
+BEGIN
+  IF NEW."isTest" IS DISTINCT FROM OLD."isTest" THEN
+    RAISE EXCEPTION 'Roll.isTest cannot change';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER roll_test_flag_guard BEFORE UPDATE ON "Roll"
+  FOR EACH ROW EXECUTE FUNCTION roll_test_flag_guard();
