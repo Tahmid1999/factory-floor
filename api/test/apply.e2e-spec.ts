@@ -290,8 +290,9 @@ describe('apply worker', () => {
     const code = g.codes[0];
     await prisma.bundle.update({ where: { code }, data: { lastClearedAt: new Date(now() - 5000) } });
     await g.send('S-07', [ev(1, code, 'sew_collar', 8000), ev(2, code, 'sew_collar', 2000)]);
+    // The two rows apply in parallel under prefetch, so seq 2 can land first.
     await until(() => resultOf(g.devices['S-07'], 2, 'applied'));
-    expect((await inboxOf(g.devices['S-07'], 1)).result).toBe('rejected(stale-round)');
+    await until(() => resultOf(g.devices['S-07'], 1, 'rejected(stale-round)'));
     const notices = await prisma.deviceNotice.findMany({ where: { deviceId: g.devices['S-07'] } });
     expect(notices.map((n) => [n.seq, n.result])).toEqual([[1, 'rejected(stale-round)']]);
     expect(await prisma.bundleEvent.count({ where: { inboxId: (await inboxOf(g.devices['S-07'], 1)).id } })).toBe(0);

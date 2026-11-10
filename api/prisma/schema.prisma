@@ -97,6 +97,9 @@ model Device {
   @@unique([guestId, code])
 }
 
+// Bundle_on_line_idx, partial on status, is made by hand in migration
+// 20261111000400_read_indexes; Prisma 6.19 cannot declare a partial index.
+// If a generated migration drops it, delete that DROP INDEX by hand.
 model Bundle {
   id            String       @id @default(cuid())
   code          String       @unique
@@ -161,6 +164,10 @@ model BundleEvent {
   @@index([correctedAt])
 }
 
+// Posting_purged_labour_idx, partial on guestPurged and kind, is made by hand
+// in migration 20261111000400_read_indexes; Prisma 6.19 cannot declare a
+// partial index. If a generated migration drops it, delete that DROP INDEX
+// by hand.
 model Posting {
   id            String      @id @default(cuid())
   period        String
@@ -180,6 +187,9 @@ model Posting {
   @@index([bundleCode, kind])
 }
 
+// Roll_open_idx, partial on emptiedAt and isTest, is made by hand in migration
+// 20261111000200_roll_emptied; Prisma 6.19 cannot declare a partial index.
+// If a generated migration drops it, delete that DROP INDEX by hand.
 model Roll {
   id                String          @id @default(cuid())
   code              String          @unique

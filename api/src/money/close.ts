@@ -28,6 +28,10 @@ export async function closeMonth(
   role = 'system',
 ): Promise<{ closed: boolean; close: PeriodClose }> {
   if (period >= periodOf(now)) throw new BadRequestException({ error: 'month not over' });
+  // Only right under READ COMMITTED: each statement after the lock takes a
+  // fresh snapshot, so it sees every posting that held the shared lock. Never
+  // run this in RepeatableRead or Serializable as the P&L read is, or the
+  // snapshot is taken before the lock is granted and misses them.
   await lockPeriod(tx, period, 'exclusive');
   const existing = await tx.periodClose.findUnique({ where: { period } });
   if (existing) return { closed: false, close: existing };
