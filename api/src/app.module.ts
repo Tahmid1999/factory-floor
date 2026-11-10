@@ -9,6 +9,7 @@ import { GuestsModule } from './guests/guests.module';
 import { HealthController } from './health.controller';
 import { HoodModule } from './hood/hood.module';
 import { IngestModule } from './ingest/ingest.module';
+import { MoneyModule } from './money/money.module';
 import { SimWorkController } from './sim/sim-work.controller';
 import { StockModule } from './stock/stock.module';
 
@@ -24,6 +25,7 @@ import { StockModule } from './stock/stock.module';
     HoodModule,
     AdminModule,
     StockModule,
+    MoneyModule,
   ],
   controllers: [HealthController, SimWorkController],
 })

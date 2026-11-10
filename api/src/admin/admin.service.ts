@@ -13,6 +13,8 @@ import { audit } from '../audit/audit';
 import { CLOCK, Clock } from '../clock';
 import { deviceLabel, HoodService } from '../hood/hood';
 import { POLO_ROUTE, STYLE_CODE } from '../line/line';
+import { PERIOD_RE } from '../money/close';
+import { CloseService } from '../money/close.service';
 import { PrismaService } from '../prisma.service';
 import { deleteGuestData, lockBundles, orphanPostings } from '../purge/guest-data';
 import { stressRefusal } from '../limits';
@@ -50,6 +52,7 @@ export class AdminService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(CLOCK) private readonly clock: Clock,
     @Inject(HoodService) private readonly hood: HoodService,
+    @Inject(CloseService) private readonly closer: CloseService,
   ) {}
 
   async floor() {
@@ -347,6 +350,15 @@ export class AdminService {
     );
     this.hood.emit('stock', `stock adjust ${out.rollCode} ${deltaCm} cm ${reason}`);
     return out;
+  }
+
+  async close(who: Who, body: unknown) {
+    const { period } = (body ?? {}) as Record<string, unknown>;
+    if (typeof period !== 'string' || !PERIOD_RE.test(period)) {
+      throw new BadRequestException({ error: 'period must be YYYY-MM' });
+    }
+    const { closed, close } = await this.closer.close(period, who.login, who.role);
+    return { closed, close: { ...close, closedAt: close.closedAt.getTime() } };
   }
 
   // Each issue is its own transaction, as 20 cutting tables would be, so the

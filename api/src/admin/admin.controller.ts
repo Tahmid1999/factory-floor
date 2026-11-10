@@ -67,6 +67,12 @@ export class AdminController {
     return this.admin.adjust({ login: req.acting.login ?? 'admin', role: req.acting.role }, body);
   }
 
+  @Post('close')
+  @Writes()
+  close(@Req() req: ActingRequest, @Body() body: unknown) {
+    return this.admin.close({ login: req.acting.login ?? 'admin', role: req.acting.role }, body);
+  }
+
   // Open to anyone: it is the "try breaking it" button. Its own limits sit in
   // the service, under the read limit every route here has.
   @Post('stock/stress')
