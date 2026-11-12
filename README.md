@@ -71,15 +71,53 @@ RabbitMQ is not needed for this demo's volume. It is here because the real syste
 
 ## Money
 
-Money is integer mills (a thousandth of a dollar). Applying a step writes a labour posting at the piece rate in force at the scan time; rates carry an `effectiveFrom` date. Waste is priced from those postings: when a rework flag lands, every step applied after the flag's scan time is marked wasted, and its labour plus that operation's trims is the waste. One function does that, for the trap card and for the admin.
+Money is integer mills (a thousandth of a dollar). Every cost and every sale is a row in one postings table, with a kind (fabric, trims, labour, revenue, adjustment, write-off) and the month it belongs to. The P&L is a `GROUP BY` over that table, in SQL, and the month-end close stores the same query's answer, so the closed number and the live number come out of one function.
 
-The audit table can be inserted into and read by the app's database role, and that's all. UPDATE and DELETE are revoked in a migration, and a test proves an UPDATE fails. Migrations run as a second role.
+### Fabric
+
+Fabric comes in rolls of 300 m, bought at $3.20 to $3.60 a metre, and a bundle takes 18 m. Every metre in or out is a row in a stock ledger: received, issued to cutting, or adjusted after a count. The ledger is append-only. The app's database role can't update a movement, and a trigger refuses a delete unless the row belongs to a test roll. A roll's on-hand is the sum of its movements, never a stored balance.
+
+A cut locks the roll row, sums its ledger, and issues 18 m if it's there. That lock is the whole of the concurrency story: two cutting tables can't both take the last 18 m. If a cut would leave less than a bundle, it takes the rest of the roll, because nobody cuts a bundle out of 9 m of remnant. The issue posts a fabric cost at that roll's price, so two bundles cut from different rolls can cost different amounts.
+
+The stock page has a stress button. It receives a 100 m test roll and fires 20 cuts of 10 m at it at once, each in its own transaction, the way 20 cutting tables would. Ten get through and ten are refused, every time, and `/hood` prints how long it took. Test rolls carry no money and are purged after an hour.
+
+### What gets posted when
+
+- Cut: fabric, at the roll's price.
+- Each sewing step: labour at the piece rate in force at the scan time, plus that operation's trims.
+- Ship: revenue, at the FOB price ($4.20 a piece) times the bundle's pieces.
+- Scrap: a write-off of everything already spent on the bundle.
+- A stock count that disagrees with the ledger: an adjustment at the roll's price, a loss as a cost and a find as a negative cost.
+
+The P&L is on an incurred basis. Fabric and labour are costs in the month they're spent, and revenue lands in the month the bundle ships, so a month with a lot on the line looks worse than it is. Two memo lines say how much: work in progress (what has been spent on bundles still on the line when the month ended) and write-off (what was spent on bundles that were scrapped). Neither is subtracted again, since those costs are already in.
+
+### Waste and the audit log
+
+Applying a step writes a labour posting at the piece rate in force at the scan time; rates carry an `effectiveFrom` date. Waste is priced from those postings: when a rework flag lands, every step applied after the flag's scan time is marked wasted, and its labour plus that operation's trims is the waste. One function does that, for the trap card and for the admin.
 
 ![One bundle's timeline in the admin after the all-async trap: the sleeve scan marked wasted, the clear back to sew collar in round 1, and the redone collar posted nothing](docs/admin-bundle.png)
 
 The timeline shows why: the flag's scan time is before the sleeve's, even though it reached the server 20 s later, so the sleeve is the wasted step.
 
-This is slice 1. The stock ledger, fabric and revenue postings, payroll and the month-end P&L come in slice 2. The postings table already has their kinds.
+The audit table can be inserted into and read by the app's database role, and that's all. UPDATE and DELETE are revoked in a migration, and a test proves an UPDATE fails. Migrations run as a second role.
+
+### Closing a month
+
+A closed month can't change. Every posting takes a shared advisory lock on its month before it checks whether that month is closed, and the close takes the same lock exclusively. So a close waits for postings already running, and postings that arrive during the close wait for it and then see it closed. The close runs at five past each hour for the month before, and the admin can run it by hand.
+
+A scan that is dated in a closed month still counts. Offline-first means a device can come back on the 2nd with scans from the 31st. Its postings keep their own date but are booked into the earliest open month, and the P&L shows them as their own line: `late scans from October`. October's closed number never moves.
+
+### The seeded month
+
+The live line only started in November, so to have a closed month to show I ran October through the same code. The seed runs the simulator, the API and the worker in one process on a fixed clock, from 1 Oct 00:00 UTC to the minute it started, then closes October at 1 Nov 00:05 as `seed`.
+
+It runs slower than the live line: about 165 bundles a day against about 1,200 live, because a full-pace month would have taken hours on this VM and the API is down while it runs. Each tick moves the clock 5 minutes and spreads its scans across those 5 minutes. The two hours around midnight on the 31st run finer, at 30 s ticks.
+
+That's where the late scans come from. The seed takes S-09 offline from 23:50 on 31 Oct to 00:20 on 1 Nov. Its scans queue on the device, and S-10's scans on the same bundles are held until S-09's arrive. When S-09 comes back, after the close, all of them are booked into November as late scans from October: 20 postings on the live run. That is S-09's outage and everything that waited on it, not 20 of S-09's own scans.
+
+On the live VM on 11 Nov 2026 it made 6,871 bundles and 60,757 postings in 23 minutes. October closed in 56 ms with $77,893.74 of contribution and $12,463.90 of work in progress. The API was down for 24 minutes.
+
+The money pages are `/admin/stock`, `/admin/payroll` and `/admin/pnl`. The P&L can leave out the simulated line's rows, which leaves only what visitors did.
 
 
 ## Measured on the live deploy
@@ -121,9 +159,9 @@ Set `SIM_ENABLED=0` in `.env` for a quiet line.
 
 ### Tests
 
-    cd api && npm test                      # unit, 55
-    npm run migrate:test && npm run test:e2e   # against factory_test and RabbitMQ, 120
-    cd web && npx playwright install chromium && npx playwright test   # phone browser, 24
+    cd api && npm test                      # unit, 67
+    npm run migrate:test && npm run test:e2e   # against factory_test and RabbitMQ, 192
+    cd web && npx playwright install chromium && npx playwright test   # phone browser and admin, 29
 
 Playwright builds and starts its own API and worker on `factory_test` with the simulated line off, and shortens the trap's Wi-Fi drop to 3 s. `npx playwright test -c playwright.sim.config.ts` runs the trap in both modes again with the line running fast beside it, which is how I found the simulator touching a visitor's bundle.
 
@@ -138,6 +176,10 @@ Files: `deploy/docker-compose.prod.yml`, `deploy/deploy.sh`, `deploy/env.prod.ex
 
 It makes one guest, runs a batch round trip and a gate flag with its rejected follow-up, and checks that `/sim/work` is 404 from outside and which pages may be framed.
 
+The smoke test also checks that October is closed, runs the roll stress once and reads today's payroll. The stress button allows one run a minute per address, so wait a minute between smoke runs.
+
+`deploy/reseed.sh` is the one-off that wiped the slice-1 data and seeded October. It does nothing without `--yes`.
+
 The Caddyfile is mounted into its container as a single file, so after a `git pull` in `demo-host` Caddy has to be restarted, not reloaded. A reload reads the old file and says the config is unchanged.
 
 
@@ -150,4 +192,9 @@ The Caddyfile is mounted into its container as a single file, so after a `git pu
 - Rate limits live in the memory of the one API process, so a restart resets them, and a second replica would need them in a shared store.
 - Visitor numbers are small and most of the activity is the simulated line, labelled as such.
 - Scanning is by tap. Camera scanning of a printed ticket comes with the Android app.
-- No P&L yet; see Money.
+- The P&L is incurred, not accrual. Revenue and the cost of the same bundle can fall in different months; the work-in-progress line says by how much.
+- Admin reset removes this month's guest and simulated postings with their bundles, but the stock ledger is append-only and keeps the fabric those bundles took. After a reset, issued fabric and fabric postings no longer match.
+- A visitor's bundles go 24 h after they go quiet, and their postings with them, so the work-in-progress line understates what visitors left on the line.
+- The simulated line's scans are kept for 60 days, and payroll is read from scans, so October's payroll page goes empty at the end of November. Its postings stay, so October's P&L and its close don't change.
+- The day of the reseed has a hole of 24 minutes with no scans, from when the seed started until the live line came back. It shows in that day's floor and payroll.
+- The seeded October runs at a slower pace than the live line (see Money). Its totals are real sums of real postings, but there are fewer of them.
